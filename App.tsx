@@ -1,3 +1,8 @@
+/**
+ * Entry point for the StudArchive mobile app.
+ * Initializes the SQLite-backed data model and drives the in-screen navigation flow (rooms -> containers -> items) via local state.
+ * Renders the main sections: status/header, room selector, container selector, and item list with CRUD modals.
+ */
 import React, { useEffect, useState } from 'react';
 import {
   View,
@@ -40,12 +45,21 @@ import {
 import { colors } from './src/theme/colors';
 import { layout } from './src/theme/layout';
 import { typography } from './src/theme/typography';
+import AboutScreen from './src/screens/AboutScreen';
+import PartDetailScreen, {
+  PartDetailParams,
+} from './src/screens/PartDetailScreen';
 
 type ItemConditionKey = 'new' | 'used' | 'mixed' | 'unknown';
 
 export default function App() {
   const [status, setStatus] = useState<'checking' | 'ok' | 'error'>('checking');
   const [message, setMessage] = useState('Initializing database…');
+  const [currentScreen, setCurrentScreen] = useState<
+    'home' | 'about' | 'partDetail'
+  >('home');
+  const [partDetailParams, setPartDetailParams] =
+    useState<PartDetailParams | null>(null);
 
   // Rooms
   const [rooms, setRooms] = useState<Room[]>([]);
@@ -395,6 +409,39 @@ export default function App() {
 
   // ---------- RENDER ----------
 
+  if (currentScreen === 'about') {
+    return (
+      <View style={styles.aboutWrapper}>
+        <View style={styles.aboutHeaderRow}>
+          <Button
+            label="Back"
+            variant="outline"
+            onPress={() => setCurrentScreen('home')}
+          />
+        </View>
+        <AboutScreen />
+      </View>
+    );
+  }
+
+  if (currentScreen === 'partDetail') {
+    return (
+      <View style={styles.aboutWrapper}>
+        <View style={styles.aboutHeaderRow}>
+          <Button
+            label="Back"
+            variant="outline"
+            onPress={() => {
+              setCurrentScreen('home');
+              setPartDetailParams(null);
+            }}
+          />
+        </View>
+        <PartDetailScreen params={partDetailParams ?? undefined} />
+      </View>
+    );
+  }
+
   return (
     <>
       <ScrollView
@@ -419,6 +466,26 @@ export default function App() {
           >
             {message}
           </Text>
+          <Button
+            label="About"
+            variant="outline"
+            onPress={() => setCurrentScreen('about')}
+            style={styles.aboutButton}
+          />
+          <Button
+            label="Part Detail"
+            variant="outline"
+            onPress={() => {
+              setPartDetailParams({
+                partId: 'TEST-1234',
+                partName: 'Test Part',
+                colorName: 'Red',
+                quantity: 10,
+              });
+              setCurrentScreen('partDetail');
+            }}
+            style={styles.aboutButton}
+          />
         </View>
 
         {/* Rooms */}
@@ -1061,4 +1128,16 @@ const styles = StyleSheet.create({
     gap: layout.spacingSm,
     marginBottom: layout.spacingSm,
   },
+  aboutWrapper: {
+    flex: 1,
+    backgroundColor: colors.background,
+  },
+  aboutHeaderRow: {
+    paddingTop: 56,
+    paddingHorizontal: layout.spacingLg,
+  },
+  aboutButton: {
+    marginTop: layout.spacingSm,
+  },
 });
+
