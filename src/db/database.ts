@@ -1,10 +1,31 @@
 // src/db/database.ts
-import { openDatabaseAsync } from 'expo-sqlite/next';
+import { openDatabaseAsync, type SQLiteDatabase } from 'expo-sqlite';
 
-export type DB = SQLite.WebSQLDatabase;
+let dbPromise: Promise<SQLiteDatabase> | null = null;
 
-let _db: DB | null = null;
+/**
+ * Get a shared async database instance.
+ * Note: Using v2 db name so we can evolve schema without complex migrations.
+ */
+export function getDb(): Promise<SQLiteDatabase> {
+  if (!dbPromise) {
+    dbPromise = openDatabaseAsync('legoCollection_v2.db'); // 👈 new DB file
+  }
+  return dbPromise;
+}
 
-export async function getDb() {
-  return await openDatabaseAsync('legoCollection.db');
+/**
+ * Run basic migrations (migrations table only for now).
+ */
+export async function initDb(): Promise<void> {
+  const db = await getDb();
+
+  // Create migrations table if it doesn't exist
+  await db.execAsync(`
+    CREATE TABLE IF NOT EXISTS migrations (
+      id      INTEGER PRIMARY KEY NOT NULL,
+      name    TEXT NOT NULL,
+      run_at  TEXT NOT NULL
+    );
+  `);
 }

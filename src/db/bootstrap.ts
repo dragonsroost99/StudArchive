@@ -2,6 +2,7 @@
 import { db } from './database';
 import { runMigrations } from './migrate';
 
+
 export function initDb() {
   // Ensure the migrations meta table exists
  db.transaction(tx => {
