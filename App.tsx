@@ -54,6 +54,7 @@ import PartDetailScreen, {
 } from './src/screens/PartDetailScreen';
 import PartListScreen from './src/screens/PartListScreen';
 import EditPartScreen from './src/screens/EditPartScreen';
+import ContainerDetailScreen from './src/screens/ContainerDetailScreen';
 
 type ItemConditionKey = 'new' | 'used' | 'mixed' | 'unknown';
 
@@ -61,12 +62,16 @@ export default function App() {
   const [status, setStatus] = useState<'checking' | 'ok' | 'error'>('checking');
   const [message, setMessage] = useState('Initializing database…');
   const [currentScreen, setCurrentScreen] = useState<
-    'home' | 'about' | 'partDetail' | 'partList' | 'editPart'
+    'home' | 'about' | 'partDetail' | 'partList' | 'editPart' | 'containerDetail'
   >('home');
   const [partDetailParams, setPartDetailParams] =
     useState<PartDetailParams | null>(null);
   const [editPartParams, setEditPartParams] =
     useState<PartDetailParams | null>(null);
+  const [containerDetailParams, setContainerDetailParams] = useState<{
+    containerId: number;
+    containerName?: string;
+  } | null>(null);
   const [partDetailRefreshKey, setPartDetailRefreshKey] = useState(0);
 
   // Rooms
@@ -572,6 +577,29 @@ export default function App() {
     );
   }
 
+  if (currentScreen === 'containerDetail') {
+    return (
+      <View style={styles.aboutWrapper}>
+        <View style={styles.aboutHeaderRow}>
+          <Button
+            label="Back"
+            variant="outline"
+            onPress={() => {
+              setCurrentScreen('home');
+              setContainerDetailParams(null);
+            }}
+          />
+        </View>
+        <ContainerDetailScreen
+          params={
+            containerDetailParams ?? undefined
+          }
+          onSelectItem={item => handleOpenPartDetailFromList(item)}
+        />
+      </View>
+    );
+  }
+
   if (currentScreen === 'editPart') {
     return (
       <View style={styles.aboutWrapper}>
@@ -770,9 +798,14 @@ export default function App() {
                         styles.containerChip,
                         isActive && styles.containerChipActive,
                       ]}
-                      onPress={() =>
-                        setSelectedContainerId(container.id)
-                      }
+                      onPress={() => {
+                        setSelectedContainerId(container.id);
+                        setContainerDetailParams({
+                          containerId: container.id,
+                          containerName: container.name,
+                        });
+                        setCurrentScreen('containerDetail');
+                      }}
                       onLongPress={() =>
                         confirmDeleteContainer(container.id)
                       }

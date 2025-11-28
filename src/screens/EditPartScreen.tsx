@@ -1,10 +1,12 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
   KeyboardAvoidingView,
+  Modal,
   Platform,
   ScrollView,
   StyleSheet,
   Text,
+  TouchableOpacity,
   View,
 } from 'react-native';
 import { Input } from '../components/Input';
@@ -31,6 +33,7 @@ type EditableItem = {
   category: string | null;
   description: string | null;
   qty: number | null;
+  container_id: number | null;
 };
 
 export default function EditPartScreen({
@@ -53,6 +56,14 @@ export default function EditPartScreen({
   const [categoryName, setCategoryName] = useState('');
   const [description, setDescription] = useState('');
   const [quantity, setQuantity] = useState('');
+  const [selectedContainerId, setSelectedContainerId] = useState<number | null>(
+    null
+  );
+  const [containers, setContainers] = useState<
+    { id: number; name: string; roomName?: string | null }[]
+  >([]);
+  const [containerPickerVisible, setContainerPickerVisible] = useState(false);
+
   const [hasTypedName, setHasTypedName] = useState(false);
   const [hasTypedColor, setHasTypedColor] = useState(false);
   const [hasTypedCategory, setHasTypedCategory] = useState(false);
@@ -87,7 +98,8 @@ export default function EditPartScreen({
           color,
           category,
           description,
-          qty
+          qty,
+          container_id
         FROM items
         WHERE id = ?
         LIMIT 1;
@@ -122,6 +134,9 @@ export default function EditPartScreen({
             ? String(record.qty)
             : ''
         );
+        setSelectedContainerId(
+          record.container_id != null ? Number(record.container_id) : null
+        );
         setHasTypedName(false);
         setHasTypedColor(false);
         setHasTypedCategory(false);
@@ -144,6 +159,44 @@ export default function EditPartScreen({
       isMounted = false;
     };
   }, [partId]);
+
+  useEffect(() => {
+    let isMounted = true;
+    (async () => {
+      try {
+        const db = await getDb();
+        const rows = await db.getAllAsync<{
+          id: number;
+          name: string;
+          room_name: string | null;
+        }>(
+          `
+            SELECT
+              c.id,
+              c.name,
+              NULL AS room_name
+            FROM containers c
+            ORDER BY c.name ASC;
+          `
+        );
+        if (isMounted) {
+          setContainers(rows);
+        }
+      } catch (e: any) {
+        console.error('Failed to load containers', e);
+      }
+    })();
+    return () => {
+      isMounted = false;
+    };
+  }, []);
+
+  const containerLabel = useMemo(() => {
+    if (selectedContainerId == null) return 'No container';
+    const match = containers.find(c => c.id === selectedContainerId);
+    if (!match) return 'No container';
+    return match.roomName ? `${match.roomName} · ${match.name}` : match.name;
+  }, [containers, selectedContainerId]);
 
   async function handleSave() {
     if (!partId) return;
@@ -168,7 +221,8 @@ export default function EditPartScreen({
             color = ?,
             category = ?,
             description = ?,
-            qty = ?
+            qty = ?,
+            container_id = ?
           WHERE id = ?;
         `,
         [
@@ -177,6 +231,7 @@ export default function EditPartScreen({
           categoryName.trim() || null,
           description.trim() || null,
           resolvedQty,
+          selectedContainerId,
           partId,
         ]
       );
@@ -190,6 +245,7 @@ export default function EditPartScreen({
         category: categoryName.trim() || null,
         description: description.trim() || null,
         qty: resolvedQty,
+        container_id: selectedContainerId,
       });
       setSaveStatus('success');
     } catch (e: any) {
@@ -318,6 +374,14 @@ export default function EditPartScreen({
             inputMode="numeric"
             placeholder="0"
           />
+          <TouchableOpacity
+            style={styles.selector}
+            disabled={loading}
+            onPress={() => setContainerPickerVisible(true)}
+          >
+            <Text style={styles.selectorLabel}>Container</Text>
+            <Text style={styles.selectorValue}>{containerLabel}</Text>
+          </TouchableOpacity>
 
           <Button
             label={saving ? 'Saving...' : 'Save'}
@@ -327,6 +391,66 @@ export default function EditPartScreen({
           />
         </View>
       </ScrollView>
+      <Modal
+        visible={containerPickerVisible}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setContainerPickerVisible(false)}
+      >
+        <View style={styles.modalOverlay}>
+          <TouchableOpacity
+            style={styles.modalBackdrop}
+            activeOpacity={1}
+            onPress={() => setContainerPickerVisible(false)}
+          />
+          <View style={styles.modalCard}>
+            <TouchableOpacity
+              style={[
+                styles.optionRow,
+                selectedContainerId == null && styles.optionRowActive,
+              ]}
+              onPress={() => {
+                setSelectedContainerId(null);
+                setContainerPickerVisible(false);
+              }}
+            >
+              <Text
+                style={[
+                  styles.optionText,
+                  selectedContainerId == null && styles.optionTextActive,
+                ]}
+              >
+                No container
+              </Text>
+            </TouchableOpacity>
+            {containers.map(option => {
+              const isActive = option.id === selectedContainerId;
+              const label = option.roomName
+                ? `${option.roomName} · ${option.name}`
+                : option.name;
+              return (
+                <TouchableOpacity
+                  key={option.id}
+                  style={[styles.optionRow, isActive && styles.optionRowActive]}
+                  onPress={() => {
+                    setSelectedContainerId(option.id);
+                    setContainerPickerVisible(false);
+                  }}
+                >
+                  <Text
+                    style={[
+                      styles.optionText,
+                      isActive && styles.optionTextActive,
+                    ]}
+                  >
+                    {label}
+                  </Text>
+                </TouchableOpacity>
+              );
+            })}
+          </View>
+        </View>
+      </Modal>
     </KeyboardAvoidingView>
   );
 }
@@ -377,5 +501,57 @@ const styles = StyleSheet.create({
   },
   saveButton: {
     marginTop: layout.spacingSm,
+  },
+  selector: {
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: layout.radiusMd,
+    paddingHorizontal: layout.spacingMd,
+    paddingVertical: layout.spacingSm,
+    backgroundColor: colors.surface,
+  },
+  selectorLabel: {
+    fontSize: typography.caption,
+    color: colors.textMuted,
+    marginBottom: layout.spacingXs / 2,
+  },
+  selectorValue: {
+    fontSize: typography.body,
+    color: colors.text,
+    fontWeight: '600',
+  },
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: colors.modalBackdrop,
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: layout.spacingMd,
+  },
+  modalBackdrop: {
+    ...StyleSheet.absoluteFillObject,
+  },
+  modalCard: {
+    width: '100%',
+    maxWidth: 420,
+    backgroundColor: colors.surface,
+    borderRadius: layout.radiusMd,
+    borderWidth: 1,
+    borderColor: colors.border,
+    paddingVertical: layout.spacingSm,
+  },
+  optionRow: {
+    paddingVertical: layout.spacingSm,
+    paddingHorizontal: layout.spacingMd,
+  },
+  optionRowActive: {
+    backgroundColor: colors.primarySoft,
+  },
+  optionText: {
+    fontSize: typography.body,
+    color: colors.text,
+  },
+  optionTextActive: {
+    color: colors.heading,
+    fontWeight: '700',
   },
 });
