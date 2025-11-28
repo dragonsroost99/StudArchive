@@ -13,6 +13,9 @@ import {
   TouchableOpacity,
   ScrollView,
   Modal,
+  KeyboardAvoidingView,
+  Platform,
+  Alert,
 } from 'react-native';
 
 import { Button } from './src/components/Button';
@@ -49,6 +52,8 @@ import AboutScreen from './src/screens/AboutScreen';
 import PartDetailScreen, {
   PartDetailParams,
 } from './src/screens/PartDetailScreen';
+import PartListScreen from './src/screens/PartListScreen';
+import EditPartScreen from './src/screens/EditPartScreen';
 
 type ItemConditionKey = 'new' | 'used' | 'mixed' | 'unknown';
 
@@ -56,10 +61,13 @@ export default function App() {
   const [status, setStatus] = useState<'checking' | 'ok' | 'error'>('checking');
   const [message, setMessage] = useState('Initializing database…');
   const [currentScreen, setCurrentScreen] = useState<
-    'home' | 'about' | 'partDetail'
+    'home' | 'about' | 'partDetail' | 'partList' | 'editPart'
   >('home');
   const [partDetailParams, setPartDetailParams] =
     useState<PartDetailParams | null>(null);
+  const [editPartParams, setEditPartParams] =
+    useState<PartDetailParams | null>(null);
+  const [partDetailRefreshKey, setPartDetailRefreshKey] = useState(0);
 
   // Rooms
   const [rooms, setRooms] = useState<Room[]>([]);
@@ -88,9 +96,18 @@ export default function App() {
   const [newItemNumber, setNewItemNumber] = useState('');
   const [newItemQty, setNewItemQty] = useState('1');
   const [newItemColor, setNewItemColor] = useState('');
+  const [newItemCategory, setNewItemCategory] = useState('');
+  const [newItemDescription, setNewItemDescription] = useState('');
   const [newItemCondition, setNewItemCondition] =
     useState<ItemConditionKey>('unknown');
   const [newItemValueEach, setNewItemValueEach] = useState('');
+  const [newItemNameTyped, setNewItemNameTyped] = useState(false);
+  const [newItemNumberTyped, setNewItemNumberTyped] = useState(false);
+  const [newItemColorTyped, setNewItemColorTyped] = useState(false);
+  const [newItemCategoryTyped, setNewItemCategoryTyped] = useState(false);
+  const [newItemDescriptionTyped, setNewItemDescriptionTyped] = useState(false);
+  const [newItemQtyTyped, setNewItemQtyTyped] = useState(false);
+  const [newItemValueEachTyped, setNewItemValueEachTyped] = useState(false);
 
   // Modals
   const [roomModalVisible, setRoomModalVisible] = useState(false);
@@ -210,15 +227,26 @@ export default function App() {
     }
   }
 
-  async function handleDeleteContainer(id: number) {
+  async function deleteContainerNow(id: number) {
     try {
       if (!selectedRoomId) return;
       await deleteContainer(id);
       await refreshContainers(selectedRoomId);
     } catch (e: any) {
       console.error(e);
-      setContainersError(e?.message ?? 'Failed to delete container');
+        setContainersError(e?.message ?? 'Failed to delete container');
     }
+  }
+
+  function confirmDeleteContainer(id: number) {
+    Alert.alert(
+      'Delete container?',
+      'Are you sure you want to delete this container?',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        { text: 'Delete', style: 'destructive', onPress: () => void deleteContainerNow(id) },
+      ]
+    );
   }
 
   useEffect(() => {
@@ -271,6 +299,24 @@ export default function App() {
     return 'unknown';
   }
 
+  function handleFirstType(
+    incoming: string,
+    currentValue: string,
+    hasTyped: boolean,
+    markTyped: (value: boolean) => void,
+    setter: (value: string) => void
+  ) {
+    if (!hasTyped) {
+      const delta = incoming.startsWith(currentValue)
+        ? incoming.slice(currentValue.length)
+        : incoming;
+      markTyped(true);
+      setter(delta);
+      return;
+    }
+    setter(incoming);
+  }
+
   async function handleSaveItem() {
     try {
       if (!selectedContainerId) return;
@@ -284,6 +330,10 @@ export default function App() {
         !Number.isNaN(valueEachNum) && valueEachNum > 0
           ? valueEachNum
           : undefined;
+      const category =
+        newItemCategory.trim() !== '' ? newItemCategory.trim() : undefined;
+      const description =
+        newItemDescription.trim() !== '' ? newItemDescription.trim() : undefined;
 
       if (editingItem == null) {
         await createItem({
@@ -294,6 +344,8 @@ export default function App() {
           qty: safeQty,
           color: newItemColor || undefined,
           condition: conditionKeyToLabel(newItemCondition),
+          category,
+          description,
           valueEach,
         });
       } else {
@@ -306,6 +358,8 @@ export default function App() {
           qty: safeQty,
           color: newItemColor || undefined,
           condition: conditionKeyToLabel(newItemCondition),
+          category,
+          description,
           valueEach,
         });
       }
@@ -315,8 +369,17 @@ export default function App() {
       setNewItemNumber('');
       setNewItemQty('1');
       setNewItemColor('');
+      setNewItemCategory('');
+      setNewItemDescription('');
       setNewItemCondition('unknown');
       setNewItemValueEach('');
+      setNewItemNameTyped(false);
+      setNewItemNumberTyped(false);
+      setNewItemColorTyped(false);
+      setNewItemCategoryTyped(false);
+      setNewItemDescriptionTyped(false);
+      setNewItemQtyTyped(false);
+      setNewItemValueEachTyped(false);
       setEditingItem(null);
 
       await refreshItems(selectedContainerId);
@@ -338,6 +401,17 @@ export default function App() {
     }
   }
 
+  function confirmDeleteItem(id: number) {
+    Alert.alert(
+      'Delete item?',
+      'Are you sure you want to delete this item?',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        { text: 'Delete', style: 'destructive', onPress: () => void handleDeleteItem(id) },
+      ]
+    );
+  }
+
   function openAddItemModal() {
     if (!selectedContainerId) return;
     setEditingItem(null);
@@ -346,8 +420,17 @@ export default function App() {
     setNewItemName('');
     setNewItemNumber('');
     setNewItemColor('');
+    setNewItemCategory('');
+    setNewItemDescription('');
     setNewItemQty('1');
     setNewItemValueEach('');
+    setNewItemNameTyped(false);
+    setNewItemNumberTyped(false);
+    setNewItemColorTyped(false);
+    setNewItemCategoryTyped(false);
+    setNewItemDescriptionTyped(false);
+    setNewItemQtyTyped(false);
+    setNewItemValueEachTyped(false);
     setItemModalVisible(true);
   }
 
@@ -357,11 +440,20 @@ export default function App() {
     setNewItemName(item.name);
     setNewItemNumber(item.number ?? '');
     setNewItemColor(item.color ?? '');
+    setNewItemCategory(item.category ?? '');
+    setNewItemDescription(item.description ?? '');
     setNewItemQty(String(item.qty || 1));
     setNewItemValueEach(
       item.value_each != null ? item.value_each.toString() : ''
     );
     setNewItemCondition(labelToConditionKey(item.condition ?? 'Unknown'));
+    setNewItemNameTyped(false);
+    setNewItemNumberTyped(false);
+    setNewItemColorTyped(false);
+    setNewItemCategoryTyped(false);
+    setNewItemDescriptionTyped(false);
+    setNewItemQtyTyped(false);
+    setNewItemValueEachTyped(false);
     setItemModalVisible(true);
   }
 
@@ -409,6 +501,22 @@ export default function App() {
 
   // ---------- RENDER ----------
 
+  function handleOpenPartDetailFromList(item: {
+    id: number;
+    name: string;
+    color: string | null;
+    qty: number | null;
+    quantity?: number | null;
+  }) {
+    setPartDetailParams({
+      partId: String(item.id),
+      partName: item.name,
+      colorName: item.color ?? undefined,
+      quantity: item.qty ?? item.quantity ?? undefined,
+    });
+    setCurrentScreen('partDetail');
+  }
+
   if (currentScreen === 'about') {
     return (
       <View style={styles.aboutWrapper}>
@@ -420,6 +528,21 @@ export default function App() {
           />
         </View>
         <AboutScreen />
+      </View>
+    );
+  }
+
+  if (currentScreen === 'partList') {
+    return (
+      <View style={styles.aboutWrapper}>
+        <View style={styles.aboutHeaderRow}>
+          <Button
+            label="Back"
+            variant="outline"
+            onPress={() => setCurrentScreen('home')}
+          />
+        </View>
+        <PartListScreen onSelectPart={handleOpenPartDetailFromList} />
       </View>
     );
   }
@@ -437,7 +560,61 @@ export default function App() {
             }}
           />
         </View>
-        <PartDetailScreen params={partDetailParams ?? undefined} />
+        <PartDetailScreen
+          params={partDetailParams ?? undefined}
+          refreshKey={partDetailRefreshKey}
+          onEditPress={params => {
+            setEditPartParams(params);
+            setCurrentScreen('editPart');
+          }}
+        />
+      </View>
+    );
+  }
+
+  if (currentScreen === 'editPart') {
+    return (
+      <View style={styles.aboutWrapper}>
+        <View style={styles.aboutHeaderRow}>
+          <Button
+            label="Back"
+            variant="outline"
+            onPress={() => {
+              setCurrentScreen('partDetail');
+              setEditPartParams(null);
+            }}
+          />
+        </View>
+        <EditPartScreen
+          params={editPartParams ?? partDetailParams ?? undefined}
+          onSaved={updated => {
+            const resolvedId =
+              updated?.id ||
+              (editPartParams?.partId
+                ? Number(editPartParams.partId)
+                : partDetailParams?.partId
+                ? Number(partDetailParams.partId)
+                : 0);
+            const resolvedPartId =
+              resolvedId && !Number.isNaN(resolvedId)
+                ? String(resolvedId)
+                : editPartParams?.partId ?? partDetailParams?.partId ?? '';
+            if (!resolvedPartId) {
+              setCurrentScreen('home');
+              setEditPartParams(null);
+              return;
+            }
+            setPartDetailParams({
+              partId: resolvedPartId,
+              partName: updated?.name ?? partDetailParams?.partName,
+              colorName: updated?.color ?? partDetailParams?.colorName,
+              quantity: updated?.qty ?? partDetailParams?.quantity,
+            });
+            setPartDetailRefreshKey(key => key + 1);
+            setCurrentScreen('partDetail');
+            setEditPartParams(null);
+          }}
+        />
       </View>
     );
   }
@@ -473,16 +650,11 @@ export default function App() {
             style={styles.aboutButton}
           />
           <Button
-            label="Part Detail"
+            label="Parts"
             variant="outline"
             onPress={() => {
-              setPartDetailParams({
-                partId: 'TEST-1234',
-                partName: 'Test Part',
-                colorName: 'Red',
-                quantity: 10,
-              });
-              setCurrentScreen('partDetail');
+              setPartDetailParams(null);
+              setCurrentScreen('partList');
             }}
             style={styles.aboutButton}
           />
@@ -592,19 +764,19 @@ export default function App() {
                       const isActive =
                         container.id === selectedContainerId;
                       return (
-                        <TouchableOpacity
-                          key={container.id}
-                          style={[
-                            styles.containerChip,
-                            isActive && styles.containerChipActive,
-                          ]}
-                          onPress={() =>
-                            setSelectedContainerId(container.id)
-                          }
-                          onLongPress={() =>
-                            handleDeleteContainer(container.id)
-                          }
-                        >
+                    <TouchableOpacity
+                      key={container.id}
+                      style={[
+                        styles.containerChip,
+                        isActive && styles.containerChipActive,
+                      ]}
+                      onPress={() =>
+                        setSelectedContainerId(container.id)
+                      }
+                      onLongPress={() =>
+                        confirmDeleteContainer(container.id)
+                      }
+                    >
                           <Text
                             style={[
                               styles.containerChipText,
@@ -688,7 +860,7 @@ export default function App() {
                       <Button
                         label="Delete"
                         variant="danger"
-                        onPress={() => handleDeleteItem(item.id)}
+                        onPress={() => confirmDeleteItem(item.id)}
                         style={styles.listDeleteButton}
                       />
                     </View>
@@ -771,91 +943,169 @@ export default function App() {
         }}
       >
         <View style={styles.modalBackdrop}>
-          <View style={[styles.modalCard, { maxHeight: '85%' }]}>
-            <ScrollView
-              contentContainerStyle={{ paddingBottom: layout.spacingLg }}
-              keyboardShouldPersistTaps="handled"
-            >
-              <Text style={styles.modalTitle}>
-                {editingItem ? 'Edit Item' : 'Add Item'}
-              </Text>
+            <View style={[styles.modalCard, styles.modalCardTall]}>
+              <KeyboardAvoidingView
+                style={{ flex: 1 }}
+                behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+              >
+                <ScrollView
+                  style={styles.modalScroll}
+                  contentContainerStyle={styles.modalScrollContent}
+                  keyboardShouldPersistTaps="handled"
+                >
+                <Text style={styles.modalTitle}>
+                  {editingItem ? 'Edit Item' : 'Add Item'}
+                </Text>
 
-              <Text style={styles.subLabel}>Type</Text>
-              <View style={styles.typeChipsRow}>
-                {renderTypeChip('set', 'Set')}
-                {renderTypeChip('part', 'Part')}
-                {renderTypeChip('minifig', 'Minifig')}
-                {renderTypeChip('moc', 'MOC')}
-              </View>
-
-              <Text style={styles.subLabel}>Condition</Text>
-              <View style={styles.typeChipsRow}>
-                {renderConditionChip('new', 'New')}
-                {renderConditionChip('used', 'Used')}
-                {renderConditionChip('mixed', 'Mixed')}
-                {renderConditionChip('unknown', 'Unknown')}
-              </View>
-
-               <Input
-                label="Name"
-                value={newItemName}
-                onChangeText={setNewItemName}
-                placeholder="Falcon, 1x2 Plate, etc."
-              />
-
-                <Input
-                label="Number"
-                value={newItemNumber}
-                onChangeText={setNewItemNumber}
-                placeholder="Set / part number (optional)"
-              />
-                <Input
-                label="Color"
-                value={newItemColor}
-                onChangeText={setNewItemColor}
-                placeholder="Dark Bluish Gray, etc."
-              />
-
-
-                <View style={styles.row}>
-                  <Input
-                    label="Qty"
-                    value={newItemQty}
-                    onChangeText={setNewItemQty}
-                    placeholder="1"
-                    keyboardType="number-pad"
-                    style={{ flex: 0.6 }}
-                  />
-                  <Input
-                    label="Value each"
-                    value={newItemValueEach}
-                    onChangeText={setNewItemValueEach}
-                    placeholder="0.00"
-                    keyboardType="decimal-pad"
-                    style={{ flex: 1 }}
-                  />
+                <Text style={styles.subLabel}>Type</Text>
+                <View style={styles.typeChipsRow}>
+                  {renderTypeChip('set', 'Set')}
+                  {renderTypeChip('part', 'Part')}
+                  {renderTypeChip('minifig', 'Minifig')}
+                  {renderTypeChip('moc', 'MOC')}
                 </View>
 
+                <Text style={styles.subLabel}>Condition</Text>
+                <View style={styles.typeChipsRow}>
+                  {renderConditionChip('new', 'New')}
+                  {renderConditionChip('used', 'Used')}
+                  {renderConditionChip('mixed', 'Mixed')}
+                  {renderConditionChip('unknown', 'Unknown')}
+                </View>
 
-              {itemsError ? (
-                <Text style={styles.errorText}>{itemsError}</Text>
-              ) : null}
+                 <Input
+                  label="Name"
+                  value={newItemName}
+                  onChangeText={text =>
+                    handleFirstType(
+                      text,
+                      newItemName,
+                      newItemNameTyped,
+                      setNewItemNameTyped,
+                      setNewItemName
+                    )
+                  }
+                  placeholder="Falcon, 1x2 Plate, etc."
+                />
 
-              <View style={styles.modalButtonRow}>
-                <Button
-                  label="Cancel"
-                  variant="outline"
-                  onPress={() => {
-                    setItemModalVisible(false);
-                    setEditingItem(null);
-                  }}
+                  <Input
+                  label="Number"
+                  value={newItemNumber}
+                  onChangeText={text =>
+                    handleFirstType(
+                      text,
+                      newItemNumber,
+                      newItemNumberTyped,
+                      setNewItemNumberTyped,
+                      setNewItemNumber
+                    )
+                  }
+                  placeholder="Set / part number (optional)"
                 />
-                <Button
-                  label={editingItem ? 'Save Changes' : 'Save Item'}
-                  onPress={handleSaveItem}
+                  <Input
+                  label="Color"
+                  value={newItemColor}
+                  onChangeText={text =>
+                    handleFirstType(
+                      text,
+                      newItemColor,
+                      newItemColorTyped,
+                      setNewItemColorTyped,
+                      setNewItemColor
+                    )
+                  }
+                  placeholder="Dark Bluish Gray, etc."
                 />
-              </View>
-            </ScrollView>
+                <Input
+                  label="Category"
+                  value={newItemCategory}
+                  onChangeText={text =>
+                    handleFirstType(
+                      text,
+                      newItemCategory,
+                      newItemCategoryTyped,
+                      setNewItemCategoryTyped,
+                      setNewItemCategory
+                    )
+                  }
+                  placeholder="Category (optional)"
+                />
+                <Input
+                  label="Description"
+                  value={newItemDescription}
+                  onChangeText={text =>
+                    handleFirstType(
+                      text,
+                      newItemDescription,
+                      newItemDescriptionTyped,
+                      setNewItemDescriptionTyped,
+                      setNewItemDescription
+                    )
+                  }
+                  placeholder="Description (optional)"
+                  multiline
+                  numberOfLines={3}
+                  style={{ minHeight: 90 }}
+                />
+
+
+                  <View style={styles.row}>
+                    <Input
+                      label="Qty"
+                      value={newItemQty}
+                      onChangeText={text =>
+                        handleFirstType(
+                          text.replace(/\D+/g, ''),
+                          newItemQty,
+                          newItemQtyTyped,
+                          setNewItemQtyTyped,
+                          setNewItemQty
+                        )
+                      }
+                      placeholder="1"
+                      keyboardType="number-pad"
+                      inputMode="numeric"
+                      style={{ flex: 0.6 }}
+                    />
+                    <Input
+                      label="Value each"
+                      value={newItemValueEach}
+                      onChangeText={text =>
+                        handleFirstType(
+                          text,
+                          newItemValueEach,
+                          newItemValueEachTyped,
+                          setNewItemValueEachTyped,
+                          setNewItemValueEach
+                        )
+                      }
+                      placeholder="0.00"
+                      keyboardType="decimal-pad"
+                      style={{ flex: 1 }}
+                    />
+                  </View>
+
+
+                {itemsError ? (
+                  <Text style={styles.errorText}>{itemsError}</Text>
+                ) : null}
+
+                <View style={styles.modalButtonRow}>
+                  <Button
+                    label="Cancel"
+                    variant="outline"
+                    onPress={() => {
+                      setItemModalVisible(false);
+                      setEditingItem(null);
+                    }}
+                  />
+                  <Button
+                    label={editingItem ? 'Save Changes' : 'Save Item'}
+                    onPress={handleSaveItem}
+                  />
+                </View>
+              </ScrollView>
+            </KeyboardAvoidingView>
           </View>
         </View>
       </Modal>
@@ -1094,6 +1344,18 @@ const styles = StyleSheet.create({
     padding: layout.spacingLg,
     borderWidth: 1,
     borderColor: colors.border,
+  },
+  modalCardTall: {
+    maxHeight: '85%',
+    alignSelf: 'stretch',
+    flex: 1,
+  },
+  modalScroll: {
+    flex: 1,
+  },
+  modalScrollContent: {
+    paddingBottom: layout.spacingLg,
+    flexGrow: 1,
   },
   modalTitle: {
     fontSize: 20,

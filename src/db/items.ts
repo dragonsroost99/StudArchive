@@ -12,6 +12,8 @@ export type Item = {
   qty: number;
   condition: string | null;   // e.g. "New", "Used", "Mixed"
   color: string | null;       // e.g. "Dark Bluish Gray"
+  category: string | null;
+  description: string | null;
   value_each: number | null;  // per-unit value
   value_total: number | null; // qty * value_each
 };
@@ -28,11 +30,24 @@ export async function ensureItemsTable(): Promise<void> {
       qty          INTEGER NOT NULL DEFAULT 1,
       condition    TEXT,
       color        TEXT,
+      category     TEXT,
+      description  TEXT,
       value_each   REAL,
       value_total  REAL,
       FOREIGN KEY(container_id) REFERENCES containers(id) ON DELETE CASCADE
     );
   `);
+
+  const columns = await db.getAllAsync<{ name: string }>(`PRAGMA table_info(items);`);
+  const hasCategory = columns.some(col => col.name === 'category');
+  const hasDescription = columns.some(col => col.name === 'description');
+
+  if (!hasCategory) {
+    await db.execAsync(`ALTER TABLE items ADD COLUMN category TEXT;`);
+  }
+  if (!hasDescription) {
+    await db.execAsync(`ALTER TABLE items ADD COLUMN description TEXT;`);
+  }
 }
 
 export async function listItemsForContainer(
@@ -50,6 +65,8 @@ export async function listItemsForContainer(
       qty,
       condition,
       color,
+      category,
+      description,
       value_each,
       value_total
     FROM items
@@ -68,6 +85,8 @@ export async function createItem(params: {
   qty?: number;
   condition?: string;
   color?: string;
+  category?: string;
+  description?: string;
   valueEach?: number;
 }): Promise<void> {
   const db = await getDb();
@@ -87,9 +106,9 @@ export async function createItem(params: {
   await db.runAsync(
     `
     INSERT INTO items
-      (type, name, number, container_id, qty, condition, color, value_each, value_total)
+      (type, name, number, container_id, qty, condition, color, category, description, value_each, value_total)
     VALUES
-      (?, ?, ?, ?, ?, ?, ?, ?, ?);
+      (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
   `,
     [
       params.type,
@@ -99,6 +118,8 @@ export async function createItem(params: {
       qty,
       params.condition ?? null,
       params.color ?? null,
+      params.category ?? null,
+      params.description ?? null,
       valueEach,
       valueTotal,
     ]
@@ -114,6 +135,8 @@ export async function updateItem(params: {
   qty?: number;
   condition?: string;
   color?: string;
+  category?: string;
+  description?: string;
   valueEach?: number;
 }): Promise<void> {
   const db = await getDb();
@@ -141,6 +164,8 @@ export async function updateItem(params: {
       qty = ?,
       condition = ?,
       color = ?,
+      category = ?,
+      description = ?,
       value_each = ?,
       value_total = ?
     WHERE id = ?;
@@ -153,6 +178,8 @@ export async function updateItem(params: {
       qty,
       params.condition ?? null,
       params.color ?? null,
+      params.category ?? null,
+      params.description ?? null,
       valueEach,
       valueTotal,
       params.id,
