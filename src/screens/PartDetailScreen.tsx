@@ -6,6 +6,7 @@ import { getDb } from '../db/database';
 import { colors } from '../theme/colors';
 import { layout } from '../theme/layout';
 import { typography } from '../theme/typography';
+import { fetchInventoryFromRebrickable, type BuildPart } from '../services/inventoryImport/rebrickable';
 
 export type PartDetailParams = {
   partId: string;
@@ -83,6 +84,7 @@ export default function PartDetailScreen({
   const [moveError, setMoveError] = useState<string | null>(null);
   const [savingMove, setSavingMove] = useState(false);
   const [buildParts, setBuildParts] = useState<BuildPartRow[]>([]);
+  const [inventoryFilter, setInventoryFilter] = useState<'all' | 'part' | 'minifigure'>('all');
   const [inventoryModalVisible, setInventoryModalVisible] = useState(false);
   const [editingBuildPart, setEditingBuildPart] = useState<BuildPartRow | null>(null);
   const [buildComponentName, setBuildComponentName] = useState('');
@@ -90,6 +92,9 @@ export default function PartDetailScreen({
   const [buildComponentSubtype, setBuildComponentSubtype] = useState<'part' | 'minifig' | 'set' | 'moc'>('part');
   const [buildQuantity, setBuildQuantity] = useState('1');
   const [buildIsSpare, setBuildIsSpare] = useState(false);
+  const [importModalVisible, setImportModalVisible] = useState(false);
+  const [importSetNumber, setImportSetNumber] = useState('');
+  const [importLoading, setImportLoading] = useState(false);
 
 async function loadPartById(id: string): Promise<PartRecord | null> {
     const db = await getDb();
@@ -201,7 +206,7 @@ async function loadPartById(id: string): Promise<PartRecord | null> {
   }, [selectedLocation?.itemId]);
 
   function isSetOrMocType(value?: string | null): boolean {
-    const t = (value ?? '').toLowerCase();
+    const t = (value ?? '').trim().toLowerCase();
     return t === 'set' || t === 'moc';
   }
 
@@ -432,6 +437,104 @@ async function loadPartById(id: string): Promise<PartRecord | null> {
         },
       ]
     );
+  }
+
+  async function insertImportedParts(parts: BuildPart[], replaceExisting: boolean) {
+    if (!part || !part.id) return;
+    const parentId = Number(part.id);
+    if (Number.isNaN(parentId)) return;
+    const db = await getDb();
+    await db.execAsync('BEGIN TRANSACTION;');
+    try {
+      if (replaceExisting) {
+        await db.runAsync(`DELETE FROM build_parts WHERE parent_item_id = ?;`, [parentId]);
+      }
+      for (const p of parts) {
+        const subtype = (p.componentSubtype || 'Part').toLowerCase();
+        if (subtype === 'minifigure' && p.designId) {
+          const existing = await db.getAllAsync<{ id: number; quantity: number }>(
+            `
+              SELECT id, quantity
+              FROM build_parts
+              WHERE parent_item_id = ?
+                AND component_subtype = ?
+                AND component_number = ?
+              LIMIT 1;
+            `,
+            [parentId, subtype, p.designId]
+          );
+          const match = existing[0];
+          if (match) {
+            await db.runAsync(
+              `UPDATE build_parts SET quantity = ? WHERE id = ?;`,
+              [(match.quantity ?? 0) + (p.quantity ?? 0), match.id]
+            );
+            continue;
+          }
+        }
+        await db.runAsync(
+          `
+            INSERT INTO build_parts
+              (parent_item_id, component_subtype, component_name, component_color, component_number, quantity, is_spare)
+            VALUES
+              (?, ?, ?, ?, ?, ?, ?);
+          `,
+          [
+            parentId,
+            subtype,
+            p.componentName || null,
+            p.componentColorName || null,
+            p.designId || null,
+            p.quantity ?? 0,
+            p.isSpare ? 1 : 0,
+          ]
+        );
+      }
+      await db.execAsync('COMMIT;');
+    } catch (error) {
+      await db.execAsync('ROLLBACK;');
+      throw error;
+    }
+  }
+
+  async function handleImportFromBrickSet() {
+    if (!part || !part.id || !importSetNumber.trim()) return;
+    setImportLoading(true);
+    try {
+      const parts = await fetchInventoryFromRebrickable(importSetNumber.trim());
+      if (!parts || parts.length === 0) {
+        Alert.alert('No inventory found', 'Rebrickable returned no parts for that set number.');
+        return;
+      }
+      const proceed = async (replace: boolean) => {
+        await insertImportedParts(parts, replace);
+        await refreshBuildPartsOnly();
+        setImportModalVisible(false);
+        setImportSetNumber('');
+      };
+
+      if (buildParts.length > 0) {
+        Alert.alert(
+          'Replace existing inventory?',
+          'Replace existing inventory or append to it?',
+          [
+            { text: 'Cancel', style: 'cancel' },
+            { text: 'Append', onPress: () => void proceed(false) },
+            { text: 'Replace', style: 'destructive', onPress: () => void proceed(true) },
+          ]
+        );
+      } else {
+        await proceed(false);
+      }
+    } catch (error) {
+      console.error('Import from Rebrickable failed', error);
+      Alert.alert(
+        'Import failed',
+        'Import from Rebrickable failed. Check the set number and try again.'
+      );
+    } finally {
+      setImportLoading(false);
+    }
   }
 
   const containerLabel = useMemo(() => {
@@ -777,16 +880,59 @@ async function loadPartById(id: string): Promise<PartRecord | null> {
               <View style={styles.inventorySection}>
                 <View style={styles.inventoryHeaderRow}>
                   <Text style={styles.sectionTitle}>{inventoryTitle}</Text>
-                  <Button
-                    label="Add item"
-                    variant="outline"
-                    onPress={openInventoryModalForAdd}
-                  />
+                  <View style={styles.inventoryHeaderActions}>
+                    <Button
+                      label="Import from Rebrickable"
+                      variant="outline"
+                      onPress={() => setImportModalVisible(true)}
+                      style={styles.inventoryActionButton}
+                    />
+                    <Button
+                      label="Add item"
+                      variant="outline"
+                      onPress={openInventoryModalForAdd}
+                    />
+                  </View>
+                </View>
+                <View style={styles.inventoryTabs}>
+                  {[
+                    { label: 'All', value: 'all' as const },
+                    { label: 'Parts', value: 'part' as const },
+                    { label: 'Minifigures', value: 'minifigure' as const },
+                  ].map(tab => {
+                    const isActive = inventoryFilter === tab.value;
+                    return (
+                      <TouchableOpacity
+                        key={tab.value}
+                        style={[
+                          styles.inventoryTab,
+                          isActive && styles.inventoryTabActive,
+                        ]}
+                        onPress={() => setInventoryFilter(tab.value)}
+                      >
+                        <Text
+                          style={[
+                            styles.inventoryTabText,
+                            isActive && styles.inventoryTabTextActive,
+                          ]}
+                        >
+                          {tab.label}
+                        </Text>
+                      </TouchableOpacity>
+                    );
+                  })}
                 </View>
                 {buildParts.length === 0 ? (
                   <Text style={styles.inventoryEmpty}>No inventory defined yet.</Text>
                 ) : (
-                  buildParts.map(row => {
+                  buildParts
+                    .filter(row => {
+                      const subtype = (row.componentSubtype ?? '').toLowerCase();
+                      if (inventoryFilter === 'part') return subtype === 'part';
+                      if (inventoryFilter === 'minifigure') return subtype === 'minifigure';
+                      return true;
+                    })
+                    .map(row => {
                     const metaParts: string[] = [];
                     if (row.componentColor) metaParts.push(row.componentColor);
                     if (row.componentSubtype) metaParts.push(row.componentSubtype);
@@ -902,6 +1048,48 @@ async function loadPartById(id: string): Promise<PartRecord | null> {
                 label={savingMove ? 'Moving...' : 'Move'}
                 onPress={handleSubmitMove}
                 disabled={savingMove}
+              />
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Import from Rebrickable modal */}
+      <Modal
+        visible={importModalVisible}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setImportModalVisible(false)}
+      >
+        <View style={styles.modalOverlay}>
+          <TouchableOpacity
+            style={styles.modalBackdrop}
+            activeOpacity={1}
+            onPress={() => setImportModalVisible(false)}
+          />
+          <View style={styles.modalCard}>
+            <Text style={styles.modalTitle}>Import from Rebrickable</Text>
+            <Input
+              label="Set number"
+              value={importSetNumber}
+              onChangeText={setImportSetNumber}
+              placeholder="e.g. 75192"
+              autoCapitalize="none"
+              autoCorrect={false}
+              keyboardType="number-pad"
+              inputMode="numeric"
+            />
+            <View style={styles.modalButtonRow}>
+              <Button
+                label="Cancel"
+                variant="outline"
+                onPress={() => setImportModalVisible(false)}
+                disabled={importLoading}
+              />
+              <Button
+                label={importLoading ? 'Importing...' : 'Import'}
+                onPress={handleImportFromBrickSet}
+                disabled={importLoading}
               />
             </View>
           </View>
@@ -1143,6 +1331,13 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     alignItems: 'center',
   },
+  inventoryHeaderActions: {
+    flexDirection: 'row',
+    gap: layout.spacingSm,
+  },
+  inventoryActionButton: {
+    minWidth: 150,
+  },
   inventoryRow: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -1196,6 +1391,30 @@ const styles = StyleSheet.create({
   inventoryEmpty: {
     fontSize: typography.body,
     color: colors.textMuted,
+  },
+  inventoryTabs: {
+    flexDirection: 'row',
+    gap: layout.spacingSm,
+    marginBottom: layout.spacingSm,
+  },
+  inventoryTab: {
+    paddingHorizontal: layout.spacingSm,
+    paddingVertical: layout.spacingXs,
+    borderRadius: layout.radiusSm,
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
+  inventoryTabActive: {
+    backgroundColor: colors.primarySoft,
+    borderColor: colors.primary,
+  },
+  inventoryTabText: {
+    fontSize: typography.chipSmall,
+    color: colors.text,
+    fontWeight: '600',
+  },
+  inventoryTabTextActive: {
+    color: colors.heading,
   },
   modalOverlay: {
     flex: 1,
