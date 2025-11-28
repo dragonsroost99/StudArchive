@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import {
   FlatList,
+  Image,
   Modal,
   StyleSheet,
   Text,
@@ -17,15 +18,26 @@ export type ItemRow = {
   id: number;
   type?: string;
   name: string;
+  number?: string | null;
   color: string | null;
   qty: number | null;
   quantity?: number | null;
   categoryName?: string | null;
+  description?: string | null;
+  condition?: string | null;
   containerId?: number | null;
+  imageUri?: string | null;
 };
 
 type PartListScreenProps = {
   onSelectPart?: (item: ItemRow) => void;
+};
+
+type GroupedRow = {
+  key: string;
+  representative: ItemRow;
+  totalQuantity: number;
+  containerIds: Array<number | null>;
 };
 
 export default function PartListScreen({ onSelectPart }: PartListScreenProps) {
@@ -46,14 +58,18 @@ export default function PartListScreen({ onSelectPart }: PartListScreenProps) {
       SELECT
         id,
         type,
-        name,
-        color,
-        qty,
-        qty AS quantity,
-        category AS categoryName,
-        container_id AS containerId
-      FROM items
-      ORDER BY name ASC;
+      name,
+      number,
+      color,
+      qty,
+      qty AS quantity,
+      category AS categoryName,
+      image_uri AS imageUri,
+      description,
+      condition,
+      container_id AS containerId
+    FROM items
+    ORDER BY name ASC;
     `);
   }
 
@@ -183,31 +199,96 @@ export default function PartListScreen({ onSelectPart }: PartListScreenProps) {
     });
   }, [items, searchText, selectedCategory, selectedSubtype]);
 
-  function renderItem({ item }: { item: ItemRow }) {
-    const colorLabel = item.color ?? 'Unknown color';
-    const categoryLabel = item.categoryName ?? null;
+  const groupedItems = useMemo(() => {
+    const map = new Map<
+      string,
+      { representative: ItemRow; totalQuantity: number; containerIds: Set<number | null> }
+    >();
+    filteredItems.forEach(item => {
+      const identityParts = [
+        item.type ?? null,
+        item.name ?? null,
+        item.number ?? null,
+        item.color ?? null,
+        item.categoryName ?? null,
+        item.description ?? null,
+        item.condition ?? null,
+      ];
+      const key = JSON.stringify(identityParts);
+      const qtyValue = item.qty ?? item.quantity ?? 0;
+      const containerId = item.containerId ?? null;
+      const existing = map.get(key);
+      if (existing) {
+        existing.totalQuantity += qtyValue;
+        existing.containerIds.add(containerId);
+      } else {
+        map.set(key, {
+          representative: item,
+          totalQuantity: qtyValue,
+          containerIds: new Set([containerId]),
+        });
+      }
+    });
+    return Array.from(map.entries()).map(([key, value]) => ({
+      key,
+      representative: value.representative,
+      totalQuantity: value.totalQuantity,
+      containerIds: Array.from(value.containerIds),
+    }));
+  }, [filteredItems]);
+
+  function renderItem({ item }: { item: GroupedRow }) {
+    const representative = item.representative;
+    const colorLabel = representative.color ?? 'Unknown color';
+    const categoryLabel = representative.categoryName ?? null;
     const subtitleText = categoryLabel
       ? `${colorLabel} · ${categoryLabel}`
       : colorLabel;
-    const locationLabel = item.containerId
-      ? containerLabelMap.get(item.containerId) ?? 'Container'
-      : 'No container';
-    const qtyValue = item.qty ?? item.quantity ?? '???';
-    const typeBadge = item.type ? item.type.toUpperCase() : null;
+    const thumbnailUri = representative.imageUri;
+    const typeKey = (representative.type ?? '').toLowerCase();
+    const placeholderStyle =
+      typeKey === 'set'
+        ? styles.thumbPlaceholderSet
+        : typeKey === 'minifig'
+        ? styles.thumbPlaceholderMinifig
+        : typeKey === 'moc'
+        ? styles.thumbPlaceholderMoc
+        : styles.thumbPlaceholderPart;
+    const containerCount = item.containerIds.length;
+    const onlyContainerId = item.containerIds[0] ?? null;
+    const locationLabel =
+      containerCount > 1
+        ? `In ${containerCount} locations`
+        : onlyContainerId == null
+          ? 'No container'
+          : containerLabelMap.get(onlyContainerId) ?? 'Container';
+    const qtyValue = item.totalQuantity;
+    const typeBadge = representative.type ? representative.type.toUpperCase() : null;
     return (
       <TouchableOpacity
         style={styles.card}
         onPress={() => {
           if (onSelectPart) {
-            onSelectPart(item);
+            onSelectPart(representative);
           } else {
-            console.log('Part tapped', item);
+            console.log('Part tapped', representative);
           }
         }}
       >
         <View style={styles.row}>
+          <View style={styles.thumbWrapper}>
+            {thumbnailUri ? (
+              <Image source={{ uri: thumbnailUri }} style={styles.thumbImage} />
+            ) : (
+              <View style={[styles.thumbPlaceholder, placeholderStyle]}>
+                <Text style={styles.thumbPlaceholderText}>
+                  {(representative.type ?? 'part').slice(0, 1).toUpperCase()}
+                </Text>
+              </View>
+            )}
+          </View>
           <View style={{ flex: 1 }}>
-            <Text style={styles.title}>{item.name}</Text>
+            <Text style={styles.title}>{representative.name}</Text>
             <Text style={styles.subtitle}>{subtitleText}</Text>
             <Text style={styles.meta}>{locationLabel}</Text>
           </View>
@@ -223,8 +304,8 @@ export default function PartListScreen({ onSelectPart }: PartListScreenProps) {
   return (
     <View style={styles.container}>
       <FlatList
-        data={filteredItems}
-        keyExtractor={item => item.id.toString()}
+        data={groupedItems}
+        keyExtractor={item => item.key}
         renderItem={renderItem}
         ItemSeparatorComponent={() => <View style={styles.separator} />}
         contentContainerStyle={styles.listContent}
@@ -430,6 +511,48 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: layout.spacingSm,
+  },
+  thumbWrapper: {
+    width: 56,
+    height: 56,
+    borderRadius: layout.radiusSm,
+    overflow: 'hidden',
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: colors.background,
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
+  thumbImage: {
+    width: '100%',
+    height: '100%',
+    resizeMode: 'cover',
+  },
+  thumbPlaceholder: {
+    width: '100%',
+    height: '100%',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  thumbPlaceholderText: {
+    fontSize: typography.body,
+    fontWeight: '700',
+    color: colors.text,
+  },
+  thumbPlaceholderPart: {
+    backgroundColor: colors.primarySoft,
+  },
+  thumbPlaceholderSet: {
+    backgroundColor: colors.background,
+  },
+  thumbPlaceholderMinifig: {
+    backgroundColor: colors.border,
+  },
+  thumbPlaceholderMoc: {
+    backgroundColor: colors.background,
+    borderStyle: 'dashed',
+    borderWidth: 1,
+    borderColor: colors.border,
   },
   title: {
     fontSize: typography.body,

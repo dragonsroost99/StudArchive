@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import { TextInput, TextInputProps, View, Text, StyleSheet } from 'react-native';
 import { colors } from '../theme/colors';
 import { layout } from '../theme/layout';
@@ -6,28 +6,73 @@ import { typography } from '../theme/typography';
 
 interface InputProps extends TextInputProps {
   label?: string;
+  clearOnFirstKeystroke?: boolean;
+  overwriteIndicator?: boolean;
 }
 
-export function Input({ label, style, onFocus, onBlur, ...rest }: InputProps) {
+export function Input({
+  label,
+  style,
+  onFocus,
+  onBlur,
+  onChangeText,
+  clearOnFirstKeystroke = true,
+  overwriteIndicator = true,
+  ...rest
+}: InputProps) {
   const [focused, setFocused] = useState(false);
+  const [hasTyped, setHasTyped] = useState(false);
+
+  const currentValue =
+    typeof rest.value === 'string'
+      ? rest.value
+      : typeof rest.defaultValue === 'string'
+      ? rest.defaultValue
+      : '';
+
+  const showOverwriteIndicator =
+    overwriteIndicator &&
+    focused &&
+    !hasTyped &&
+    !!currentValue &&
+    currentValue.length > 0;
+
+  const inputTextStyle = useMemo(
+    () => [
+      styles.input,
+      focused && styles.inputFocused,
+      showOverwriteIndicator && styles.overwriteText,
+      style,
+    ],
+    [focused, showOverwriteIndicator, style]
+  );
 
   return (
     <View style={styles.container}>
       {label ? <Text style={styles.label}>{label}</Text> : null}
       <TextInput
         {...rest}
-        style={[
-          styles.input,
-          focused && styles.inputFocused,
-          style,
-        ]}
+        style={inputTextStyle}
         placeholderTextColor={colors.textMuted}
+        onChangeText={text => {
+          let nextValue = text;
+          if (clearOnFirstKeystroke && focused && !hasTyped) {
+            const baseline = currentValue || '';
+            nextValue = text.startsWith(baseline)
+              ? text.slice(baseline.length)
+              : text;
+          }
+          setHasTyped(true);
+          onChangeText?.(nextValue);
+        }}
         onFocus={e => {
           setFocused(true);
+          setHasTyped(false);
           onFocus?.(e);
         }}
         onBlur={e => {
           setFocused(false);
+          setHasTyped(false);
           onBlur?.(e);
         }}
       />
@@ -58,5 +103,9 @@ const styles = StyleSheet.create({
   },
   inputFocused: {
     borderColor: colors.primary,
+  },
+  overwriteText: {
+    color: colors.textMuted,
+    fontStyle: 'italic',
   },
 });

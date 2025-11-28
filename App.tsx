@@ -20,7 +20,7 @@ import {
 
 import { Button } from './src/components/Button';
 import { Input } from './src/components/Input';
-import { initDb } from './src/db/database';
+import { getDb, initDb } from './src/db/database';
 import {
   ensureRoomsTable,
   listRooms,
@@ -44,6 +44,7 @@ import {
   type Item,
   type ItemType,
 } from './src/db/items';
+import { ensureBuildPartsTable } from './src/db/buildParts';
 
 import { colors } from './src/theme/colors';
 import { layout } from './src/theme/layout';
@@ -85,6 +86,9 @@ export default function App() {
   const [containers, setContainers] = useState<Container[]>([]);
   const [containersError, setContainersError] = useState<string | null>(null);
   const [containersLoading, setContainersLoading] = useState(false);
+  const [containerStats, setContainerStats] = useState<
+    Record<number, { itemCount: number; totalQuantity: number }>
+  >({});
   const [newContainerName, setNewContainerName] = useState('Bin 1');
   const [selectedContainerId, setSelectedContainerId] = useState<number | null>(
     null
@@ -103,6 +107,7 @@ export default function App() {
   const [newItemColor, setNewItemColor] = useState('');
   const [newItemCategory, setNewItemCategory] = useState('');
   const [newItemDescription, setNewItemDescription] = useState('');
+  const [newItemImageUri, setNewItemImageUri] = useState('');
   const [newItemCondition, setNewItemCondition] =
     useState<ItemConditionKey>('unknown');
   const [newItemValueEach, setNewItemValueEach] = useState('');
@@ -111,6 +116,7 @@ export default function App() {
   const [newItemColorTyped, setNewItemColorTyped] = useState(false);
   const [newItemCategoryTyped, setNewItemCategoryTyped] = useState(false);
   const [newItemDescriptionTyped, setNewItemDescriptionTyped] = useState(false);
+  const [newItemImageUriTyped, setNewItemImageUriTyped] = useState(false);
   const [newItemQtyTyped, setNewItemQtyTyped] = useState(false);
   const [newItemValueEachTyped, setNewItemValueEachTyped] = useState(false);
 
@@ -129,6 +135,7 @@ export default function App() {
         await ensureRoomsTable();
         await ensureContainersTable();
         await ensureItemsTable();
+        await ensureBuildPartsTable();
 
         await refreshRooms();
 
@@ -192,10 +199,42 @@ export default function App() {
 
   // ---------- CONTAINERS ----------
 
+  async function refreshContainerStats() {
+    try {
+      const db = await getDb();
+      const rows = await db.getAllAsync<{
+        container_id: number | null;
+        itemCount: number;
+        totalQuantity: number | null;
+      }>(`
+        SELECT
+          container_id,
+          COUNT(*) AS itemCount,
+          SUM(qty) AS totalQuantity
+        FROM items
+        WHERE container_id IS NOT NULL
+        GROUP BY container_id;
+      `);
+      const map: Record<number, { itemCount: number; totalQuantity: number }> = {};
+      rows.forEach(row => {
+        if (row.container_id != null) {
+          map[row.container_id] = {
+            itemCount: row.itemCount ?? 0,
+            totalQuantity: row.totalQuantity ?? 0,
+          };
+        }
+      });
+      setContainerStats(map);
+    } catch (e) {
+      console.error('Failed to load container stats', e);
+    }
+  }
+
   async function refreshContainers(roomId: number | null) {
     if (!roomId) {
       setContainers([]);
       setSelectedContainerId(null);
+      setContainerStats({});
       return;
     }
     try {
@@ -203,6 +242,7 @@ export default function App() {
       const data = await listContainersForRoom(roomId);
       setContainers(data);
       setContainersError(null);
+      await refreshContainerStats();
 
       if (data.length > 0) {
         setSelectedContainerId(prev =>
@@ -275,6 +315,7 @@ export default function App() {
       setItemsError(e?.message ?? 'Failed to load items');
     } finally {
       setItemsLoading(false);
+      void refreshContainerStats();
     }
   }
 
@@ -339,6 +380,8 @@ export default function App() {
         newItemCategory.trim() !== '' ? newItemCategory.trim() : undefined;
       const description =
         newItemDescription.trim() !== '' ? newItemDescription.trim() : undefined;
+      const imageUri =
+        newItemImageUri.trim() !== '' ? newItemImageUri.trim() : undefined;
 
       if (editingItem == null) {
         await createItem({
@@ -349,6 +392,7 @@ export default function App() {
           qty: safeQty,
           color: newItemColor || undefined,
           condition: conditionKeyToLabel(newItemCondition),
+          imageUri,
           category,
           description,
           valueEach,
@@ -363,6 +407,7 @@ export default function App() {
           qty: safeQty,
           color: newItemColor || undefined,
           condition: conditionKeyToLabel(newItemCondition),
+          imageUri,
           category,
           description,
           valueEach,
@@ -376,6 +421,7 @@ export default function App() {
       setNewItemColor('');
       setNewItemCategory('');
       setNewItemDescription('');
+      setNewItemImageUri('');
       setNewItemCondition('unknown');
       setNewItemValueEach('');
       setNewItemNameTyped(false);
@@ -383,6 +429,7 @@ export default function App() {
       setNewItemColorTyped(false);
       setNewItemCategoryTyped(false);
       setNewItemDescriptionTyped(false);
+      setNewItemImageUriTyped(false);
       setNewItemQtyTyped(false);
       setNewItemValueEachTyped(false);
       setEditingItem(null);
@@ -427,6 +474,7 @@ export default function App() {
     setNewItemColor('');
     setNewItemCategory('');
     setNewItemDescription('');
+    setNewItemImageUri('');
     setNewItemQty('1');
     setNewItemValueEach('');
     setNewItemNameTyped(false);
@@ -434,6 +482,7 @@ export default function App() {
     setNewItemColorTyped(false);
     setNewItemCategoryTyped(false);
     setNewItemDescriptionTyped(false);
+    setNewItemImageUriTyped(false);
     setNewItemQtyTyped(false);
     setNewItemValueEachTyped(false);
     setItemModalVisible(true);
@@ -447,6 +496,7 @@ export default function App() {
     setNewItemColor(item.color ?? '');
     setNewItemCategory(item.category ?? '');
     setNewItemDescription(item.description ?? '');
+    setNewItemImageUri(item.image_uri ?? '');
     setNewItemQty(String(item.qty || 1));
     setNewItemValueEach(
       item.value_each != null ? item.value_each.toString() : ''
@@ -457,6 +507,7 @@ export default function App() {
     setNewItemColorTyped(false);
     setNewItemCategoryTyped(false);
     setNewItemDescriptionTyped(false);
+    setNewItemImageUriTyped(false);
     setNewItemQtyTyped(false);
     setNewItemValueEachTyped(false);
     setItemModalVisible(true);
@@ -791,6 +842,10 @@ export default function App() {
                     {containers.map(container => {
                       const isActive =
                         container.id === selectedContainerId;
+                      const stats = containerStats[container.id];
+                      const statsLabel = stats
+                        ? `${stats.itemCount} items • ${stats.totalQuantity} pieces`
+                        : '0 items • 0 pieces';
                       return (
                     <TouchableOpacity
                       key={container.id}
@@ -809,7 +864,7 @@ export default function App() {
                       onLongPress={() =>
                         confirmDeleteContainer(container.id)
                       }
-                    >
+                      >
                           <Text
                             style={[
                               styles.containerChipText,
@@ -817,6 +872,14 @@ export default function App() {
                             ]}
                           >
                             {container.name}
+                          </Text>
+                          <Text
+                            style={[
+                              styles.containerChipSubText,
+                              isActive && styles.containerChipSubTextActive,
+                            ]}
+                          >
+                            {stats ? statsLabel : 'No items yet'}
                           </Text>
                         </TouchableOpacity>
                       );
@@ -1080,6 +1143,22 @@ export default function App() {
                   numberOfLines={3}
                   style={{ minHeight: 90 }}
                 />
+                <Input
+                  label="Image URL"
+                  value={newItemImageUri}
+                  onChangeText={text =>
+                    handleFirstType(
+                      text,
+                      newItemImageUri,
+                      newItemImageUriTyped,
+                      setNewItemImageUriTyped,
+                      setNewItemImageUri
+                    )
+                  }
+                  placeholder="https://example.com/image.jpg (optional)"
+                  autoCapitalize="none"
+                  autoCorrect={false}
+                />
 
 
                   <View style={styles.row}>
@@ -1277,11 +1356,12 @@ const styles = StyleSheet.create({
   containerChip: {
     paddingHorizontal: layout.spacingMd,
     paddingVertical: layout.spacingSm,
-    borderRadius: 999,
+    borderRadius: layout.radiusMd,
     borderWidth: 1,
-    borderColor: colors.chipBorder,
+    borderColor: colors.border,
     marginRight: layout.spacingSm,
     backgroundColor: colors.background,
+    minWidth: 160,
   },
   containerChipActive: {
     backgroundColor: colors.primarySoft,
@@ -1293,6 +1373,15 @@ const styles = StyleSheet.create({
   },
   containerChipTextActive: {
     color: colors.primary,
+    fontWeight: '600',
+  },
+  containerChipSubText: {
+    fontSize: typography.caption,
+    color: colors.textMuted,
+    marginTop: 2,
+  },
+  containerChipSubTextActive: {
+    color: colors.heading,
     fontWeight: '600',
   },
 

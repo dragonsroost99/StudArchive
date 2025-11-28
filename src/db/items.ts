@@ -16,6 +16,7 @@ export type Item = {
   description: string | null;
   value_each: number | null;  // per-unit value
   value_total: number | null; // qty * value_each
+  image_uri?: string | null;
 };
 
 export async function ensureItemsTable(): Promise<void> {
@@ -34,6 +35,7 @@ export async function ensureItemsTable(): Promise<void> {
       description  TEXT,
       value_each   REAL,
       value_total  REAL,
+      image_uri    TEXT,
       FOREIGN KEY(container_id) REFERENCES containers(id) ON DELETE CASCADE
     );
   `);
@@ -41,12 +43,16 @@ export async function ensureItemsTable(): Promise<void> {
   const columns = await db.getAllAsync<{ name: string }>(`PRAGMA table_info(items);`);
   const hasCategory = columns.some(col => col.name === 'category');
   const hasDescription = columns.some(col => col.name === 'description');
+  const hasImageUri = columns.some(col => col.name === 'image_uri');
 
   if (!hasCategory) {
     await db.execAsync(`ALTER TABLE items ADD COLUMN category TEXT;`);
   }
   if (!hasDescription) {
     await db.execAsync(`ALTER TABLE items ADD COLUMN description TEXT;`);
+  }
+  if (!hasImageUri) {
+    await db.execAsync(`ALTER TABLE items ADD COLUMN image_uri TEXT;`);
   }
 }
 
@@ -68,7 +74,8 @@ export async function listItemsForContainer(
       category,
       description,
       value_each,
-      value_total
+      value_total,
+      image_uri
     FROM items
     WHERE container_id = ?
     ORDER BY type ASC, name ASC;
@@ -88,6 +95,7 @@ export async function createItem(params: {
   category?: string;
   description?: string;
   valueEach?: number;
+  imageUri?: string | null;
 }): Promise<void> {
   const db = await getDb();
   const name = params.name.trim();
@@ -106,9 +114,9 @@ export async function createItem(params: {
   await db.runAsync(
     `
     INSERT INTO items
-      (type, name, number, container_id, qty, condition, color, category, description, value_each, value_total)
+      (type, name, number, container_id, qty, condition, color, category, description, value_each, value_total, image_uri)
     VALUES
-      (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+      (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
   `,
     [
       params.type,
@@ -122,6 +130,7 @@ export async function createItem(params: {
       params.description ?? null,
       valueEach,
       valueTotal,
+      params.imageUri ?? null,
     ]
   );
 }
@@ -138,6 +147,7 @@ export async function updateItem(params: {
   category?: string;
   description?: string;
   valueEach?: number;
+  imageUri?: string | null;
 }): Promise<void> {
   const db = await getDb();
   const name = params.name.trim();
@@ -167,7 +177,8 @@ export async function updateItem(params: {
       category = ?,
       description = ?,
       value_each = ?,
-      value_total = ?
+      value_total = ?,
+      image_uri = ?
     WHERE id = ?;
   `,
     [
@@ -182,6 +193,7 @@ export async function updateItem(params: {
       params.description ?? null,
       valueEach,
       valueTotal,
+      params.imageUri ?? null,
       params.id,
     ]
   );

@@ -34,6 +34,7 @@ type EditableItem = {
   description: string | null;
   qty: number | null;
   container_id: number | null;
+  image_uri?: string | null;
 };
 
 export default function EditPartScreen({
@@ -56,6 +57,7 @@ export default function EditPartScreen({
   const [categoryName, setCategoryName] = useState('');
   const [description, setDescription] = useState('');
   const [quantity, setQuantity] = useState('');
+  const [imageUri, setImageUri] = useState('');
   const [selectedContainerId, setSelectedContainerId] = useState<number | null>(
     null
   );
@@ -63,30 +65,6 @@ export default function EditPartScreen({
     { id: number; name: string; roomName?: string | null }[]
   >([]);
   const [containerPickerVisible, setContainerPickerVisible] = useState(false);
-
-  const [hasTypedName, setHasTypedName] = useState(false);
-  const [hasTypedColor, setHasTypedColor] = useState(false);
-  const [hasTypedCategory, setHasTypedCategory] = useState(false);
-  const [hasTypedDescription, setHasTypedDescription] = useState(false);
-  const [hasTypedQuantity, setHasTypedQuantity] = useState(false);
-
-  function handleFirstType(
-    incoming: string,
-    currentValue: string,
-    hasTyped: boolean,
-    markTyped: (value: boolean) => void,
-    setter: (value: string) => void
-  ) {
-    if (!hasTyped) {
-      const delta = incoming.startsWith(currentValue)
-        ? incoming.slice(currentValue.length)
-        : incoming;
-      markTyped(true);
-      setter(delta);
-      return;
-    }
-    setter(incoming);
-  }
 
   async function loadItem(id: string): Promise<EditableItem | null> {
     const db = await getDb();
@@ -99,7 +77,8 @@ export default function EditPartScreen({
           category,
           description,
           qty,
-          container_id
+          container_id,
+          image_uri
         FROM items
         WHERE id = ?
         LIMIT 1;
@@ -134,14 +113,10 @@ export default function EditPartScreen({
             ? String(record.qty)
             : ''
         );
+        setImageUri(record.image_uri ?? '');
         setSelectedContainerId(
           record.container_id != null ? Number(record.container_id) : null
         );
-        setHasTypedName(false);
-        setHasTypedColor(false);
-        setHasTypedCategory(false);
-        setHasTypedDescription(false);
-        setHasTypedQuantity(false);
         setError(null);
       } catch (e: any) {
         console.error(e);
@@ -222,7 +197,8 @@ export default function EditPartScreen({
             category = ?,
             description = ?,
             qty = ?,
-            container_id = ?
+            container_id = ?,
+            image_uri = ?
           WHERE id = ?;
         `,
         [
@@ -232,6 +208,7 @@ export default function EditPartScreen({
           description.trim() || null,
           resolvedQty,
           selectedContainerId,
+          imageUri.trim() || null,
           partId,
         ]
       );
@@ -246,6 +223,7 @@ export default function EditPartScreen({
         description: description.trim() || null,
         qty: resolvedQty,
         container_id: selectedContainerId,
+        image_uri: imageUri.trim() || null,
       });
       setSaveStatus('success');
     } catch (e: any) {
@@ -298,78 +276,47 @@ export default function EditPartScreen({
             label="Name"
             value={name}
             editable={!loading}
-            onChangeText={text =>
-              handleFirstType(
-                text,
-                name,
-                hasTypedName,
-                setHasTypedName,
-                setName
-              )
-            }
+            onChangeText={setName}
             placeholder="Enter name"
           />
           <Input
             label="Color"
             value={colorName}
             editable={!loading}
-            onChangeText={text =>
-              handleFirstType(
-                text,
-                colorName,
-                hasTypedColor,
-                setHasTypedColor,
-                setColorName
-              )
-            }
+            onChangeText={setColorName}
             placeholder="Enter color"
           />
           <Input
             label="Category"
             value={categoryName}
             editable={!loading}
-            onChangeText={text =>
-              handleFirstType(
-                text,
-                categoryName,
-                hasTypedCategory,
-                setHasTypedCategory,
-                setCategoryName
-              )
-            }
+            onChangeText={setCategoryName}
             placeholder="Enter category"
           />
           <Input
             label="Description"
             value={description}
             editable={!loading}
-            onChangeText={text =>
-              handleFirstType(
-                text,
-                description,
-                hasTypedDescription,
-                setHasTypedDescription,
-                setDescription
-              )
-            }
+            onChangeText={setDescription}
             placeholder="Enter description"
             multiline
             numberOfLines={3}
             style={styles.multilineInput}
           />
           <Input
+            label="Image URL"
+            value={imageUri}
+            editable={!loading}
+            onChangeText={setImageUri}
+            placeholder="https://example.com/image.jpg (optional)"
+            autoCapitalize="none"
+            autoCorrect={false}
+          />
+          <Input
             label="Quantity"
             value={quantity}
             editable={!loading}
-            onChangeText={text =>
-              handleFirstType(
-                text.replace(/\D+/g, ''),
-                quantity,
-                hasTypedQuantity,
-                setHasTypedQuantity,
-                setQuantity
-              )
-            }
+            onChangeText={text => setQuantity(text.replace(/\D+/g, ''))}
             keyboardType="number-pad"
             inputMode="numeric"
             placeholder="0"
