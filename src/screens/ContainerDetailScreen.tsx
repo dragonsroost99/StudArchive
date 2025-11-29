@@ -24,6 +24,7 @@ type ContainerDetailScreenProps = {
   route?: { params?: ContainerDetailParams };
   params?: ContainerDetailParams;
   onSelectItem?: (item: ItemRow) => void;
+  onTitleChange?: (title: string) => void;
 };
 
 type ItemRow = {
@@ -43,6 +44,7 @@ export default function ContainerDetailScreen({
   route,
   params,
   onSelectItem,
+  onTitleChange,
 }: ContainerDetailScreenProps) {
   const resolvedParams = route?.params ?? params;
   const containerId = resolvedParams?.containerId;
@@ -146,6 +148,11 @@ export default function ContainerDetailScreen({
     if (!containerName) return 'Container Items';
     return containerName;
   }, [containerName]);
+
+  useEffect(() => {
+    const title = headerTitle || 'Container';
+    onTitleChange?.(title);
+  }, [headerTitle, onTitleChange]);
 
   function openMoveModal(item: ItemRow) {
     const defaultQty = item.qty ?? item.quantity ?? 1;

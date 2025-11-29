@@ -9,6 +9,7 @@ import {
   View,
 } from 'react-native';
 import { Input } from '../components/Input';
+import { Button } from '../components/Button';
 import { getDb } from '../db/database';
 import { colors } from '../theme/colors';
 import { layout } from '../theme/layout';
@@ -31,6 +32,9 @@ export type ItemRow = {
 
 type PartListScreenProps = {
   onSelectPart?: (item: ItemRow) => void;
+  onImportSet?: () => void;
+  onCreateMoc?: () => void;
+  onAddParts?: () => void;
 };
 
 type GroupedRow = {
@@ -40,7 +44,12 @@ type GroupedRow = {
   containerIds: Array<number | null>;
 };
 
-export default function PartListScreen({ onSelectPart }: PartListScreenProps) {
+export default function PartListScreen({
+  onSelectPart,
+  onImportSet,
+  onCreateMoc,
+  onAddParts,
+}: PartListScreenProps) {
   const [items, setItems] = useState<ItemRow[]>([]);
   const [searchText, setSearchText] = useState('');
   const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
@@ -311,6 +320,11 @@ export default function PartListScreen({ onSelectPart }: PartListScreenProps) {
         contentContainerStyle={styles.listContent}
         ListHeaderComponent={
           <View style={styles.controls}>
+            <View style={styles.actionsRow}>
+              <Button label="Import Set" onPress={onImportSet} />
+              <Button label="Create MOC" variant="outline" onPress={onCreateMoc} />
+              <Button label="Add Parts" variant="outline" onPress={onAddParts} />
+            </View>
             <View style={styles.tabRow}>
               {subtypeFilters.map(filter => {
                 const isActive = filter.value === selectedSubtype;
@@ -399,6 +413,11 @@ const styles = StyleSheet.create({
     padding: layout.spacingMd,
   },
   controls: {
+    marginBottom: layout.spacingSm,
+  },
+  actionsRow: {
+    flexDirection: 'row',
+    gap: layout.spacingSm,
     marginBottom: layout.spacingSm,
   },
   tabRow: {

@@ -24,11 +24,13 @@ type EditPartScreenProps = {
   route?: { params?: EditPartParams };
   params?: EditPartParams;
   onSaved?: (item: EditableItem) => void;
+  onDelete?: (id: number) => void;
 };
 
 type EditableItem = {
   id: number;
   name: string;
+  type?: string | null;
   color: string | null;
   category: string | null;
   description: string | null;
@@ -41,6 +43,7 @@ export default function EditPartScreen({
   route,
   params,
   onSaved,
+  onDelete,
 }: EditPartScreenProps) {
   const resolvedParams = route?.params ?? params;
   const partId = resolvedParams?.partId;
@@ -53,6 +56,7 @@ export default function EditPartScreen({
   );
 
   const [name, setName] = useState('');
+  const [itemType, setItemType] = useState<string>('');
   const [colorName, setColorName] = useState('');
   const [categoryName, setCategoryName] = useState('');
   const [description, setDescription] = useState('');
@@ -73,6 +77,7 @@ export default function EditPartScreen({
         SELECT
           id,
           name,
+          type,
           color,
           category,
           description,
@@ -105,6 +110,7 @@ export default function EditPartScreen({
           return;
         }
         setName(record.name ?? '');
+        setItemType(record.type ?? '');
         setColorName(record.color ?? '');
         setCategoryName(record.category ?? '');
         setDescription(record.description ?? '');
@@ -241,6 +247,10 @@ export default function EditPartScreen({
       : saveStatus === 'error'
       ? 'Save failed'
       : null;
+  const isSetType = useMemo(() => {
+    const t = (itemType ?? '').trim().toLowerCase();
+    return t === 'set' || t === 'moc';
+  }, [itemType]);
 
   return (
     <KeyboardAvoidingView
@@ -279,19 +289,21 @@ export default function EditPartScreen({
             onChangeText={setName}
             placeholder="Enter name"
           />
+          {!isSetType ? (
+            <Input
+              label="Color"
+              value={colorName}
+              editable={!loading}
+              onChangeText={setColorName}
+              placeholder="Enter color"
+            />
+          ) : null}
           <Input
-            label="Color"
-            value={colorName}
-            editable={!loading}
-            onChangeText={setColorName}
-            placeholder="Enter color"
-          />
-          <Input
-            label="Category"
+            label={isSetType ? 'Theme' : 'Category'}
             value={categoryName}
             editable={!loading}
             onChangeText={setCategoryName}
-            placeholder="Enter category"
+            placeholder={isSetType ? 'Enter theme' : 'Enter category'}
           />
           <Input
             label="Description"
@@ -334,6 +346,17 @@ export default function EditPartScreen({
             label={saving ? 'Saving...' : 'Save'}
             onPress={handleSave}
             disabled={saving || loading}
+            style={styles.saveButton}
+          />
+          <Button
+            label="Delete"
+            variant="danger"
+            onPress={() => {
+              if (!partId) return;
+              const parsedId = Number(partId);
+              if (Number.isNaN(parsedId)) return;
+              onDelete?.(parsedId);
+            }}
             style={styles.saveButton}
           />
         </View>

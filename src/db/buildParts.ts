@@ -23,4 +23,11 @@ export async function ensureBuildPartsTable(): Promise<void> {
       FOREIGN KEY(parent_item_id) REFERENCES items(id) ON DELETE CASCADE
     );
   `);
+
+  // Add missing columns for older installs
+  const columns = await db.getAllAsync<{ name: string }>(`PRAGMA table_info(build_parts);`);
+  const hasDescription = columns.some(col => col.name === 'component_description');
+  if (!hasDescription) {
+    await db.execAsync(`ALTER TABLE build_parts ADD COLUMN component_description TEXT;`);
+  }
 }

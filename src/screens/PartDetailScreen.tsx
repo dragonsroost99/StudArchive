@@ -1,12 +1,16 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { ScrollView, View, Text, StyleSheet, Modal, TouchableOpacity, Alert } from 'react-native';
+import { ScrollView, View, Text, StyleSheet, Modal, TouchableOpacity, Alert, Image } from 'react-native';
 import { Button } from '../components/Button';
 import { Input } from '../components/Input';
 import { getDb } from '../db/database';
 import { colors } from '../theme/colors';
 import { layout } from '../theme/layout';
 import { typography } from '../theme/typography';
-import { fetchInventoryFromRebrickable, type BuildPart } from '../services/inventoryImport/rebrickable';
+import {
+  fetchInventoryFromRebrickable,
+  fetchSetMetadataFromRebrickable,
+  type BuildPart,
+} from '../services/inventoryImport/rebrickable';
 
 export type PartDetailParams = {
   partId: string;
@@ -20,6 +24,7 @@ type PartDetailScreenProps = {
   params?: PartDetailParams;
   onEditPress?: (params: PartDetailParams) => void;
   refreshKey?: number;
+  onNavigateToDetail?: (params: PartDetailParams) => void;
 };
 
 type PartRecord = {
@@ -50,6 +55,7 @@ type BuildPartRow = {
   componentCondition: string | null;
   quantity: number | null;
   isSpare: number | null;
+  imageUri?: string | null;
 };
 
 export default function PartDetailScreen({
@@ -57,6 +63,8 @@ export default function PartDetailScreen({
   params,
   onEditPress,
   refreshKey = 0,
+  onTitleChange,
+  onNavigateToDetail,
 }: PartDetailScreenProps) {
   const resolvedParams = route?.params ?? params;
   const partId = resolvedParams?.partId;
@@ -106,6 +114,7 @@ async function loadPartById(id: string): Promise<PartRecord | null> {
           number,
           qty,
           qty AS quantity,
+          image_uri,
           color,
           color AS color_name,
           category AS category_name,
@@ -475,9 +484,9 @@ async function loadPartById(id: string): Promise<PartRecord | null> {
         await db.runAsync(
           `
             INSERT INTO build_parts
-              (parent_item_id, component_subtype, component_name, component_color, component_number, quantity, is_spare)
+              (parent_item_id, component_subtype, component_name, component_color, component_number, quantity, is_spare, component_description)
             VALUES
-              (?, ?, ?, ?, ?, ?, ?);
+              (?, ?, ?, ?, ?, ?, ?, ?);
           `,
           [
             parentId,
@@ -487,6 +496,7 @@ async function loadPartById(id: string): Promise<PartRecord | null> {
             p.designId || null,
             p.quantity ?? 0,
             p.isSpare ? 1 : 0,
+            p.imageUrl ?? null,
           ]
         );
       }
@@ -497,17 +507,48 @@ async function loadPartById(id: string): Promise<PartRecord | null> {
     }
   }
 
+  async function updateItemImageUri(targetId: number, uri: string) {
+    const db = await getDb();
+    await db.runAsync(
+      `
+        UPDATE items
+        SET image_uri = ?
+        WHERE id = ?;
+      `,
+      [uri, targetId]
+    );
+  }
+
   async function handleImportFromBrickSet() {
     if (!part || !part.id || !importSetNumber.trim()) return;
+    const userSetNumber = importSetNumber.trim();
     setImportLoading(true);
+    const parentId = Number(part.id);
+    if (Number.isNaN(parentId)) {
+      setImportLoading(false);
+      return;
+    }
+    const metadataPromise = fetchSetMetadataFromRebrickable(userSetNumber).catch(error => {
+      console.error('Rebrickable set metadata fetch failed', error);
+      return null;
+    });
     try {
-      const parts = await fetchInventoryFromRebrickable(importSetNumber.trim());
+      const parts = await fetchInventoryFromRebrickable(userSetNumber);
       if (!parts || parts.length === 0) {
         Alert.alert('No inventory found', 'Rebrickable returned no parts for that set number.');
         return;
       }
+      const metadata = await metadataPromise;
       const proceed = async (replace: boolean) => {
         await insertImportedParts(parts, replace);
+        if (!part.image_uri && metadata?.imageUrl) {
+          try {
+            await updateItemImageUri(parentId, metadata.imageUrl);
+            setPart(prev => (prev ? { ...prev, image_uri: metadata.imageUrl } : prev));
+          } catch (error) {
+            console.error('Failed to update imageUri from Rebrickable metadata', error);
+          }
+        }
         await refreshBuildPartsOnly();
         setImportModalVisible(false);
         setImportSetNumber('');
@@ -544,6 +585,10 @@ async function loadPartById(id: string): Promise<PartRecord | null> {
   }, [containers, destinationContainerId]);
 
   const isSetOrMoc = useMemo(() => isSetOrMocType(part?.type), [part?.type]);
+  const isSetOrMocDetails = useMemo(() => {
+    const t = (part?.type ?? '').trim().toLowerCase();
+    return t === 'set' || t === 'moc';
+  }, [part?.type]);
   const inventoryTitle = useMemo(() => {
     if (!isSetOrMoc) return 'Build Inventory';
     const t = (part?.type ?? '').toLowerCase();
@@ -747,6 +792,19 @@ async function loadPartById(id: string): Promise<PartRecord | null> {
     part?.description ??
     part?.desc ??
     'No description provided yet.';
+  const imageUri = useMemo(() => {
+    const uri = part?.image_uri ?? null;
+    if (uri && typeof uri === 'string') {
+      const trimmed = uri.trim();
+      return trimmed.length > 0 ? trimmed : null;
+    }
+    return null;
+  }, [part?.image_uri]);
+
+  useEffect(() => {
+    const nextTitle = title || 'Details';
+    onTitleChange?.(nextTitle);
+  }, [title, onTitleChange]);
 
   const totalQuantityDisplay = useMemo(() => {
     if (totalQuantity && totalQuantity > 0) return totalQuantity.toString();
@@ -762,6 +820,11 @@ async function loadPartById(id: string): Promise<PartRecord | null> {
         keyboardShouldPersistTaps="handled"
       >
         <View style={styles.card}>
+          {imageUri ? (
+            <View style={styles.imageWrapper}>
+              <Image source={{ uri: imageUri }} style={styles.detailImage} />
+            </View>
+          ) : null}
           <View style={styles.headerRow}>
             <View style={{ flex: 1 }}>
               <Text style={styles.title}>{title}</Text>
@@ -790,7 +853,7 @@ async function loadPartById(id: string): Promise<PartRecord | null> {
           </View>
           <View style={styles.actionsRow}>
             <Button
-              label="Move to container..."
+              label="Change Location"
               variant="outline"
               onPress={openMoveModal}
               disabled={
@@ -803,7 +866,7 @@ async function loadPartById(id: string): Promise<PartRecord | null> {
           <View style={styles.detailsSection}>
             <Text style={styles.sectionTitle}>Details</Text>
             <View style={styles.detailRow}>
-              <Text style={styles.detailLabel}>Category</Text>
+              <Text style={styles.detailLabel}>{isSetOrMocDetails ? 'Theme' : 'Category'}</Text>
               <Text style={styles.detailValue}>{category}</Text>
             </View>
             <View style={styles.detailRow}>
@@ -819,10 +882,12 @@ async function loadPartById(id: string): Promise<PartRecord | null> {
                 <Text style={styles.statLabel}>Count</Text>
                 <Text style={styles.statValue}>{quantity}</Text>
               </View>
-              <View style={styles.statCard}>
-                <Text style={styles.statLabel}>Color</Text>
-                <Text style={styles.statValue}>{color}</Text>
-              </View>
+              {!isSetOrMocDetails ? (
+                <View style={styles.statCard}>
+                  <Text style={styles.statLabel}>Color</Text>
+                  <Text style={styles.statValue}>{color}</Text>
+                </View>
+              ) : null}
             </View>
             <View style={styles.statsRow}>
               <View style={styles.statCard}>
@@ -882,12 +947,6 @@ async function loadPartById(id: string): Promise<PartRecord | null> {
                   <Text style={styles.sectionTitle}>{inventoryTitle}</Text>
                   <View style={styles.inventoryHeaderActions}>
                     <Button
-                      label="Import from Rebrickable"
-                      variant="outline"
-                      onPress={() => setImportModalVisible(true)}
-                      style={styles.inventoryActionButton}
-                    />
-                    <Button
                       label="Add item"
                       variant="outline"
                       onPress={openInventoryModalForAdd}
@@ -933,6 +992,11 @@ async function loadPartById(id: string): Promise<PartRecord | null> {
                       return true;
                     })
                     .map(row => {
+                    const subtype = (row.componentSubtype ?? '').toLowerCase();
+                    const imageUriFromComponent =
+                      row.componentDescription && row.componentDescription.startsWith('http')
+                        ? row.componentDescription
+                        : null;
                     const metaParts: string[] = [];
                     if (row.componentColor) metaParts.push(row.componentColor);
                     if (row.componentSubtype) metaParts.push(row.componentSubtype);
@@ -944,8 +1008,41 @@ async function loadPartById(id: string): Promise<PartRecord | null> {
                       <TouchableOpacity
                         key={row.id}
                         style={styles.inventoryRow}
-                        onPress={() => openInventoryModalForEdit(row)}
+                        onPress={async () => {
+                          if (!row.componentNumber && !row.componentName) return;
+                          try {
+                            const db = await getDb();
+                            const matches = await db.getAllAsync<{ id: number }>(
+                              `
+                                SELECT id
+                                FROM items
+                                WHERE (number = ? AND number IS NOT NULL)
+                                   OR (name = ? AND name IS NOT NULL)
+                                ORDER BY id ASC
+                                LIMIT 1;
+                              `,
+                              [row.componentNumber ?? null, row.componentName ?? null]
+                            );
+                            const targetId = matches[0]?.id;
+                            if (targetId) {
+                              onNavigateToDetail?.({
+                                partId: String(targetId),
+                                partName: row.componentName ?? undefined,
+                                colorName: row.componentColor ?? undefined,
+                                quantity: row.quantity ?? undefined,
+                              });
+                            }
+                          } catch (error) {
+                            console.error('Failed to open component detail', error);
+                          }
+                        }}
                       >
+                        {imageUriFromComponent ? (
+                          <Image
+                            source={{ uri: imageUriFromComponent }}
+                            style={styles.inventoryThumb}
+                          />
+                        ) : null}
                         <View style={{ flex: 1 }}>
                           <Text style={styles.inventoryName}>
                             {row.componentName ?? 'Unnamed component'}
@@ -1048,48 +1145,6 @@ async function loadPartById(id: string): Promise<PartRecord | null> {
                 label={savingMove ? 'Moving...' : 'Move'}
                 onPress={handleSubmitMove}
                 disabled={savingMove}
-              />
-            </View>
-          </View>
-        </View>
-      </Modal>
-
-      {/* Import from Rebrickable modal */}
-      <Modal
-        visible={importModalVisible}
-        transparent
-        animationType="fade"
-        onRequestClose={() => setImportModalVisible(false)}
-      >
-        <View style={styles.modalOverlay}>
-          <TouchableOpacity
-            style={styles.modalBackdrop}
-            activeOpacity={1}
-            onPress={() => setImportModalVisible(false)}
-          />
-          <View style={styles.modalCard}>
-            <Text style={styles.modalTitle}>Import from Rebrickable</Text>
-            <Input
-              label="Set number"
-              value={importSetNumber}
-              onChangeText={setImportSetNumber}
-              placeholder="e.g. 75192"
-              autoCapitalize="none"
-              autoCorrect={false}
-              keyboardType="number-pad"
-              inputMode="numeric"
-            />
-            <View style={styles.modalButtonRow}>
-              <Button
-                label="Cancel"
-                variant="outline"
-                onPress={() => setImportModalVisible(false)}
-                disabled={importLoading}
-              />
-              <Button
-                label={importLoading ? 'Importing...' : 'Import'}
-                onPress={handleImportFromBrickSet}
-                disabled={importLoading}
               />
             </View>
           </View>
@@ -1216,6 +1271,27 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: colors.border,
     gap: layout.spacingSm,
+  },
+  imageWrapper: {
+    width: '100%',
+    height: 220,
+    borderRadius: layout.radiusMd,
+    overflow: 'hidden',
+    backgroundColor: colors.background,
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
+  detailImage: {
+    width: '100%',
+    height: '100%',
+    resizeMode: 'cover',
+  },
+  inventoryThumb: {
+    width: 64,
+    height: 64,
+    borderRadius: layout.radiusSm,
+    marginRight: layout.spacingSm,
+    backgroundColor: colors.background,
   },
   headerRow: {
     flexDirection: 'row',
@@ -1348,6 +1424,12 @@ const styles = StyleSheet.create({
     borderRadius: layout.radiusMd,
     paddingHorizontal: layout.spacingSm,
     paddingVertical: layout.spacingXs,
+  },
+  inventoryThumb: {
+    width: 64,
+    height: 64,
+    borderRadius: layout.radiusSm,
+    marginBottom: layout.spacingXs,
   },
   inventoryName: {
     fontSize: typography.body,

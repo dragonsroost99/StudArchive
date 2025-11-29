@@ -56,15 +56,28 @@ import PartDetailScreen, {
 import PartListScreen from './src/screens/PartListScreen';
 import EditPartScreen from './src/screens/EditPartScreen';
 import ContainerDetailScreen from './src/screens/ContainerDetailScreen';
+import ImportSetScreen from './src/screens/ImportSetScreen';
+import CreateMocScreen from './src/screens/CreateMocScreen';
+import AddPartsScreen from './src/screens/AddPartsScreen';
+import { fetchSetMetadataFromRebrickable } from './src/services/inventoryImport/rebrickable';
 
 type ItemConditionKey = 'new' | 'used' | 'mixed' | 'unknown';
+type ScreenName =
+  | 'home'
+  | 'about'
+  | 'partDetail'
+  | 'partList'
+  | 'editPart'
+  | 'containerDetail'
+  | 'importSet'
+  | 'createMoc'
+  | 'addParts';
 
 export default function App() {
   const [status, setStatus] = useState<'checking' | 'ok' | 'error'>('checking');
   const [message, setMessage] = useState('Initializing database…');
-  const [currentScreen, setCurrentScreen] = useState<
-    'home' | 'about' | 'partDetail' | 'partList' | 'editPart' | 'containerDetail'
-  >('home');
+  const [currentScreen, setCurrentScreen] = useState<ScreenName>('home');
+  const [navStack, setNavStack] = useState<ScreenName[]>([]);
   const [partDetailParams, setPartDetailParams] =
     useState<PartDetailParams | null>(null);
   const [editPartParams, setEditPartParams] =
@@ -119,12 +132,78 @@ export default function App() {
   const [newItemImageUriTyped, setNewItemImageUriTyped] = useState(false);
   const [newItemQtyTyped, setNewItemQtyTyped] = useState(false);
   const [newItemValueEachTyped, setNewItemValueEachTyped] = useState(false);
+  const [setMetadataLoading, setSetMetadataLoading] = useState(false);
 
   // Modals
   const [roomModalVisible, setRoomModalVisible] = useState(false);
   const [containerModalVisible, setContainerModalVisible] = useState(false);
   const [itemModalVisible, setItemModalVisible] = useState(false);
   const [editingItem, setEditingItem] = useState<Item | null>(null);
+  const [addModalVisible, setAddModalVisible] = useState(false);
+  const [partDetailHeader, setPartDetailHeader] = useState<string>('Details');
+  const [containerHeader, setContainerHeader] = useState<string>('Container');
+
+  async function cleanOrphanBuildParts(): Promise<void> {
+    const db = await getDb();
+    try {
+      await db.runAsync(
+        `
+          DELETE FROM build_parts
+          WHERE parent_item_id NOT IN (SELECT id FROM items);
+        `
+      );
+    } catch (error) {
+      console.error('Failed to clean orphan build_parts', error);
+    }
+  }
+
+  function navigateTo(screen: ScreenName) {
+    if (screen === currentScreen) return;
+    setNavStack(prev => [...prev, currentScreen]);
+    setCurrentScreen(screen);
+  }
+
+  function goBack() {
+    setNavStack(prev => {
+      if (!prev.length) return prev;
+      const previous = prev[prev.length - 1];
+      setCurrentScreen(previous);
+      return prev.slice(0, -1);
+    });
+  }
+
+  async function goHome() {
+    setNavStack([]);
+    setCurrentScreen('home');
+    try {
+      await refreshRooms();
+      if (selectedRoomId != null) {
+        await refreshContainers(selectedRoomId);
+      }
+      if (selectedContainerId != null) {
+        await refreshItems(selectedContainerId);
+      }
+    } catch (error) {
+      console.error('Failed to refresh on home', error);
+    }
+  }
+
+  useEffect(() => {
+    if (currentScreen !== 'home') return;
+    (async () => {
+      try {
+        await refreshRooms();
+        if (selectedRoomId != null) {
+          await refreshContainers(selectedRoomId);
+        }
+        if (selectedContainerId != null) {
+          await refreshItems(selectedContainerId);
+        }
+      } catch (error) {
+        console.error('Failed to refresh on home (back nav)', error);
+      }
+    })();
+  }, [currentScreen, selectedRoomId, selectedContainerId]);
 
   // ---------- INIT ----------
 
@@ -136,6 +215,7 @@ export default function App() {
         await ensureContainersTable();
         await ensureItemsTable();
         await ensureBuildPartsTable();
+        await cleanOrphanBuildParts();
 
         await refreshRooms();
 
@@ -444,10 +524,28 @@ export default function App() {
 
   async function handleDeleteItem(id: number) {
     try {
-      if (!selectedContainerId) return;
+      const db = await getDb();
+      await db.execAsync('BEGIN TRANSACTION;');
+      await db.runAsync(`DELETE FROM build_parts WHERE parent_item_id = ?;`, [id]);
       await deleteItem(id);
-      await refreshItems(selectedContainerId);
+      await db.execAsync('COMMIT;');
+
+      if (selectedContainerId) {
+        await refreshItems(selectedContainerId);
+      }
+      setPartDetailParams(null);
+      setEditPartParams(null);
+
+      if (currentScreen === 'editPart') {
+        goBack();
+        goBack();
+      } else if (currentScreen === 'partDetail') {
+        goBack();
+      }
     } catch (e: any) {
+      try {
+        await (await getDb()).execAsync('ROLLBACK;');
+      } catch {}
       console.error(e);
       setItemsError(e?.message ?? 'Failed to delete item');
     }
@@ -462,30 +560,6 @@ export default function App() {
         { text: 'Delete', style: 'destructive', onPress: () => void handleDeleteItem(id) },
       ]
     );
-  }
-
-  function openAddItemModal() {
-    if (!selectedContainerId) return;
-    setEditingItem(null);
-    setNewItemType('set');
-    setNewItemCondition('unknown');
-    setNewItemName('');
-    setNewItemNumber('');
-    setNewItemColor('');
-    setNewItemCategory('');
-    setNewItemDescription('');
-    setNewItemImageUri('');
-    setNewItemQty('1');
-    setNewItemValueEach('');
-    setNewItemNameTyped(false);
-    setNewItemNumberTyped(false);
-    setNewItemColorTyped(false);
-    setNewItemCategoryTyped(false);
-    setNewItemDescriptionTyped(false);
-    setNewItemImageUriTyped(false);
-    setNewItemQtyTyped(false);
-    setNewItemValueEachTyped(false);
-    setItemModalVisible(true);
   }
 
   function openEditItemModal(item: Item) {
@@ -510,8 +584,44 @@ export default function App() {
     setNewItemImageUriTyped(false);
     setNewItemQtyTyped(false);
     setNewItemValueEachTyped(false);
+    setSetMetadataLoading(false);
     setItemModalVisible(true);
   }
+
+  async function handleFillFromRebrickable() {
+    if (newItemType !== 'set') return;
+    const candidate = newItemNumber.trim();
+    if (!candidate) return;
+    setSetMetadataLoading(true);
+    try {
+      const metadata = await fetchSetMetadataFromRebrickable(candidate);
+      if (!metadata) {
+        Alert.alert(
+          'Could not fetch set details',
+          'Check the set number and try again.'
+        );
+        return;
+      }
+      setNewItemName(metadata.name ?? newItemName);
+      setNewItemNameTyped(true);
+      setNewItemNumber(metadata.setNum ?? candidate);
+      setNewItemNumberTyped(true);
+      if (!newItemImageUri.trim() && metadata.imageUrl) {
+        setNewItemImageUri(metadata.imageUrl);
+        setNewItemImageUriTyped(true);
+      }
+    } catch (error) {
+      console.error('Fill from Rebrickable failed', error);
+      Alert.alert(
+        'Could not fetch set details',
+        'Check the set number and try again.'
+      );
+    } finally {
+      setSetMetadataLoading(false);
+    }
+  }
+
+  const canFillFromRebrickable = newItemType === 'set' && newItemNumber.trim().length > 0;
 
   // ---------- SMALL RENDER HELPERS ----------
 
@@ -570,20 +680,68 @@ export default function App() {
       colorName: item.color ?? undefined,
       quantity: item.qty ?? item.quantity ?? undefined,
     });
-    setCurrentScreen('partDetail');
+    navigateTo('partDetail');
   }
 
   if (currentScreen === 'about') {
     return (
       <View style={styles.aboutWrapper}>
         <View style={styles.aboutHeaderRow}>
-          <Button
-            label="Back"
-            variant="outline"
-            onPress={() => setCurrentScreen('home')}
-          />
+          <Text style={styles.headerTitle}>About</Text>
+          <View style={styles.headerActionsRow}>
+            <Button
+              label="Back"
+              variant="outline"
+              onPress={goBack}
+              style={styles.headerButton}
+            />
+            <Button
+              label="Home"
+              variant="outline"
+              onPress={goHome}
+              style={styles.headerButton}
+            />
+          </View>
         </View>
         <AboutScreen />
+      </View>
+    );
+  }
+
+  if (currentScreen === 'partDetail') {
+    const headerTitle = partDetailHeader || partDetailParams?.partName || 'Details';
+    return (
+      <View style={styles.aboutWrapper}>
+        <View style={styles.aboutHeaderRow}>
+          <Text style={styles.headerTitle}>{headerTitle}</Text>
+          <View style={styles.headerActionsRow}>
+            <Button
+              label="Back"
+              variant="outline"
+              onPress={goBack}
+              style={styles.headerButton}
+            />
+            <Button
+              label="Home"
+              variant="outline"
+              onPress={goHome}
+              style={styles.headerButton}
+            />
+          </View>
+        </View>
+        <PartDetailScreen
+          params={partDetailParams ?? undefined}
+          refreshKey={partDetailRefreshKey}
+          onEditPress={params => {
+            setEditPartParams(params);
+            navigateTo('editPart');
+          }}
+          onTitleChange={title => setPartDetailHeader(title)}
+          onNavigateToDetail={params => {
+            setPartDetailParams(params);
+            navigateTo('partDetail');
+          }}
+        />
       </View>
     );
   }
@@ -592,60 +750,152 @@ export default function App() {
     return (
       <View style={styles.aboutWrapper}>
         <View style={styles.aboutHeaderRow}>
-          <Button
-            label="Back"
-            variant="outline"
-            onPress={() => setCurrentScreen('home')}
-          />
+          <Text style={styles.headerTitle}>Collection</Text>
+          <View style={styles.headerActionsRow}>
+            <Button
+              label="Back"
+              variant="outline"
+              onPress={goBack}
+              style={styles.headerButton}
+            />
+            <Button
+              label="Home"
+              variant="outline"
+              onPress={goHome}
+              style={styles.headerButton}
+            />
+          </View>
         </View>
-        <PartListScreen onSelectPart={handleOpenPartDetailFromList} />
-      </View>
-    );
-  }
-
-  if (currentScreen === 'partDetail') {
-    return (
-      <View style={styles.aboutWrapper}>
-        <View style={styles.aboutHeaderRow}>
-          <Button
-            label="Back"
-            variant="outline"
-            onPress={() => {
-              setCurrentScreen('home');
-              setPartDetailParams(null);
-            }}
-          />
-        </View>
-        <PartDetailScreen
-          params={partDetailParams ?? undefined}
-          refreshKey={partDetailRefreshKey}
-          onEditPress={params => {
-            setEditPartParams(params);
-            setCurrentScreen('editPart');
-          }}
+        <PartListScreen
+          onSelectPart={item => handleOpenPartDetailFromList(item)}
+          onImportSet={() => navigateTo('importSet')}
+          onCreateMoc={() => navigateTo('createMoc')}
+          onAddParts={() => navigateTo('addParts')}
         />
       </View>
     );
   }
 
   if (currentScreen === 'containerDetail') {
+    const headerTitle = containerHeader || containerDetailParams?.containerName || 'Container';
     return (
       <View style={styles.aboutWrapper}>
         <View style={styles.aboutHeaderRow}>
-          <Button
-            label="Back"
-            variant="outline"
-            onPress={() => {
-              setCurrentScreen('home');
-              setContainerDetailParams(null);
-            }}
-          />
+          <Text style={styles.headerTitle}>{headerTitle}</Text>
+          <View style={styles.headerActionsRow}>
+            <Button
+              label="Back"
+              variant="outline"
+              onPress={goBack}
+              style={styles.headerButton}
+            />
+            <Button
+              label="Home"
+              variant="outline"
+              onPress={goHome}
+              style={styles.headerButton}
+            />
+          </View>
         </View>
         <ContainerDetailScreen
           params={
             containerDetailParams ?? undefined
           }
           onSelectItem={item => handleOpenPartDetailFromList(item)}
+          onTitleChange={title => setContainerHeader(title)}
+        />
+      </View>
+    );
+  }
+
+  if (currentScreen === 'importSet') {
+    return (
+      <View style={styles.aboutWrapper}>
+        <View style={styles.aboutHeaderRow}>
+          <Text style={styles.headerTitle}>Import Set</Text>
+          <View style={styles.headerActionsRow}>
+            <Button
+              label="Back"
+              variant="outline"
+              onPress={goBack}
+              style={styles.headerButton}
+            />
+            <Button
+              label="Home"
+              variant="outline"
+              onPress={goHome}
+              style={styles.headerButton}
+            />
+          </View>
+        </View>
+        <ImportSetScreen
+          onImported={newId => {
+            setPartDetailParams({ partId: String(newId) });
+            setPartDetailRefreshKey(key => key + 1);
+            navigateTo('partDetail');
+          }}
+        />
+      </View>
+    );
+  }
+
+  if (currentScreen === 'createMoc') {
+    return (
+      <View style={styles.aboutWrapper}>
+        <View style={styles.aboutHeaderRow}>
+          <Text style={styles.headerTitle}>Create MOC</Text>
+          <View style={styles.headerActionsRow}>
+            <Button
+              label="Back"
+              variant="outline"
+              onPress={goBack}
+              style={styles.headerButton}
+            />
+            <Button
+              label="Home"
+              variant="outline"
+              onPress={goHome}
+              style={styles.headerButton}
+            />
+          </View>
+        </View>
+        <CreateMocScreen
+          onCreated={newId => {
+            setPartDetailParams({ partId: String(newId) });
+            setPartDetailRefreshKey(key => key + 1);
+            navigateTo('partDetail');
+          }}
+        />
+      </View>
+    );
+  }
+
+  if (currentScreen === 'addParts') {
+    return (
+      <View style={styles.aboutWrapper}>
+        <View style={styles.aboutHeaderRow}>
+          <Text style={styles.headerTitle}>Add Parts</Text>
+          <View style={styles.headerActionsRow}>
+            <Button
+              label="Back"
+              variant="outline"
+              onPress={goBack}
+              style={styles.headerButton}
+            />
+            <Button
+              label="Home"
+              variant="outline"
+              onPress={goHome}
+              style={styles.headerButton}
+            />
+          </View>
+        </View>
+        <AddPartsScreen
+          onAdded={newId => {
+            setPartDetailParams({ partId: String(newId) });
+            setPartDetailRefreshKey(key => key + 1);
+            navigateTo('partDetail');
+          }}
         />
       </View>
     );
@@ -655,14 +905,21 @@ export default function App() {
     return (
       <View style={styles.aboutWrapper}>
         <View style={styles.aboutHeaderRow}>
-          <Button
-            label="Back"
-            variant="outline"
-            onPress={() => {
-              setCurrentScreen('partDetail');
-              setEditPartParams(null);
-            }}
-          />
+          <Text style={styles.headerTitle}>Edit Item</Text>
+          <View style={styles.headerActionsRow}>
+            <Button
+              label="Back"
+              variant="outline"
+              onPress={goBack}
+              style={styles.headerButton}
+            />
+            <Button
+              label="Home"
+              variant="outline"
+              onPress={goHome}
+              style={styles.headerButton}
+            />
+          </View>
         </View>
         <EditPartScreen
           params={editPartParams ?? partDetailParams ?? undefined}
@@ -679,7 +936,7 @@ export default function App() {
                 ? String(resolvedId)
                 : editPartParams?.partId ?? partDetailParams?.partId ?? '';
             if (!resolvedPartId) {
-              setCurrentScreen('home');
+              goBack();
               setEditPartParams(null);
               return;
             }
@@ -690,8 +947,11 @@ export default function App() {
               quantity: updated?.qty ?? partDetailParams?.quantity,
             });
             setPartDetailRefreshKey(key => key + 1);
-            setCurrentScreen('partDetail');
+            goBack();
             setEditPartParams(null);
+          }}
+          onDelete={id => {
+            confirmDeleteItem(id);
           }}
         />
       </View>
@@ -725,15 +985,20 @@ export default function App() {
           <Button
             label="About"
             variant="outline"
-            onPress={() => setCurrentScreen('about')}
+            onPress={() => navigateTo('about')}
             style={styles.aboutButton}
           />
           <Button
-            label="Parts"
+            label="ADD ITEM"
+            onPress={() => setAddModalVisible(true)}
+            style={styles.aboutButton}
+          />
+          <Button
+            label="My Collection"
             variant="outline"
             onPress={() => {
               setPartDetailParams(null);
-              setCurrentScreen('partList');
+              navigateTo('partList');
             }}
             style={styles.aboutButton}
           />
@@ -859,7 +1124,7 @@ export default function App() {
                           containerId: container.id,
                           containerName: container.name,
                         });
-                        setCurrentScreen('containerDetail');
+                        navigateTo('containerDetail');
                       }}
                       onLongPress={() =>
                         confirmDeleteContainer(container.id)
@@ -895,11 +1160,6 @@ export default function App() {
         <View style={styles.section}>
           <View style={styles.sectionHeaderRow}>
             <Text style={styles.sectionTitle}>Items in Container</Text>
-            <Button
-              label="Add Item"
-              onPress={openAddItemModal}
-              disabled={!selectedContainerId}
-            />
           </View>
 
           {selectedContainerId == null ? (
@@ -915,10 +1175,7 @@ export default function App() {
               {itemsLoading ? (
                 <Text style={styles.bodyText}>Loading items…</Text>
               ) : items.length === 0 ? (
-                <Text style={styles.bodyText}>
-                  No items in this container yet — use{' '}
-                  <Text style={styles.bold}>Add Item</Text>.
-                </Text>
+                <Text style={styles.bodyText}>No items in this container yet.</Text>
               ) : (
                 <FlatList
                 scrollEnabled={false}
@@ -936,7 +1193,7 @@ export default function App() {
                     <View style={styles.listItem}>
                       <TouchableOpacity
                         style={{ flex: 1 }}
-                        onPress={() => openEditItemModal(item)}
+                        onPress={() => handleOpenPartDetailFromList(item)}
                       >
                         <View style={styles.listRowInner}>
                           <View style={styles.typeBadge}>
@@ -953,12 +1210,6 @@ export default function App() {
                         </View>
                       </TouchableOpacity>
 
-                      <Button
-                        label="Delete"
-                        variant="danger"
-                        onPress={() => confirmDeleteItem(item.id)}
-                        style={styles.listDeleteButton}
-                      />
                     </View>
                   );
                 }}
@@ -970,6 +1221,49 @@ export default function App() {
           )}
         </View>
       </ScrollView>
+
+      <Modal
+        visible={addModalVisible}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setAddModalVisible(false)}
+      >
+        <View style={styles.modalBackdrop}>
+          <View style={styles.modalCard}>
+            <Text style={styles.modalTitle}>Add to Collection</Text>
+            <View style={styles.actionsColumn}>
+              <Button
+                label="Import Set"
+                onPress={() => {
+                  setAddModalVisible(false);
+                  navigateTo('importSet');
+                }}
+              />
+              <Button
+                label="Create MOC"
+                variant="outline"
+                onPress={() => {
+                  setAddModalVisible(false);
+                  navigateTo('createMoc');
+                }}
+              />
+              <Button
+                label="Add Parts"
+                variant="outline"
+                onPress={() => {
+                  setAddModalVisible(false);
+                  navigateTo('addParts');
+                }}
+              />
+              <Button
+                label="Cancel"
+                variant="outline"
+                onPress={() => setAddModalVisible(false)}
+              />
+            </View>
+          </View>
+        </View>
+      </Modal>
 
       {/* Room modal */}
       <Modal
@@ -1084,20 +1378,32 @@ export default function App() {
                   placeholder="Falcon, 1x2 Plate, etc."
                 />
 
-                  <Input
-                  label="Number"
-                  value={newItemNumber}
-                  onChangeText={text =>
-                    handleFirstType(
-                      text,
-                      newItemNumber,
-                      newItemNumberTyped,
-                      setNewItemNumberTyped,
-                      setNewItemNumber
-                    )
-                  }
-                  placeholder="Set / part number (optional)"
-                />
+                  <View style={styles.inlineRow}>
+                    <Input
+                      label="Number"
+                      value={newItemNumber}
+                      onChangeText={text =>
+                        handleFirstType(
+                          text,
+                          newItemNumber,
+                          newItemNumberTyped,
+                          setNewItemNumberTyped,
+                          setNewItemNumber
+                        )
+                      }
+                      placeholder="Set / part number (optional)"
+                      style={{ flex: 1 }}
+                    />
+                    {canFillFromRebrickable ? (
+                      <Button
+                        label={setMetadataLoading ? 'Filling...' : 'Fill from Rebrickable'}
+                        variant="outline"
+                        onPress={handleFillFromRebrickable}
+                        disabled={setMetadataLoading}
+                        style={styles.fillButton}
+                      />
+                    ) : null}
+                  </View>
                   <Input
                   label="Color"
                   value={newItemColor}
@@ -1479,6 +1785,17 @@ const styles = StyleSheet.create({
     paddingBottom: layout.spacingLg,
     flexGrow: 1,
   },
+  actionsColumn: {
+    gap: layout.spacingSm,
+  },
+  inlineRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-end',
+    gap: layout.spacingSm,
+  },
+  fillButton: {
+    alignSelf: 'flex-end',
+  },
   modalTitle: {
     fontSize: 20,
     fontWeight: '600',
@@ -1519,6 +1836,22 @@ const styles = StyleSheet.create({
   aboutHeaderRow: {
     paddingTop: 56,
     paddingHorizontal: layout.spacingLg,
+    gap: layout.spacingSm,
+    paddingBottom: layout.spacingMd,
+  },
+  headerButton: {
+    flex: 1,
+  },
+  headerTitle: {
+    textAlign: 'center',
+    fontSize: typography.title,
+    fontWeight: '700',
+    color: colors.heading,
+  },
+  headerActionsRow: {
+    flexDirection: 'row',
+    gap: layout.spacingSm,
+    alignItems: 'center',
   },
   aboutButton: {
     marginTop: layout.spacingSm,
