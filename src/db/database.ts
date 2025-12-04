@@ -29,3 +29,9 @@ export async function initDb(): Promise<void> {
     );
   `);
 }
+
+
+export function resetDb(): void {
+  dbPromise = null;
+}
+

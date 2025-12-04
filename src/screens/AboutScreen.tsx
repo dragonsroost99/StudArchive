@@ -1,8 +1,8 @@
-import React from 'react';
+import React, { useMemo } from 'react';
 import { ScrollView, View, Text, StyleSheet } from 'react-native';
-import { colors } from '../theme/colors';
 import { layout } from '../theme/layout';
 import { typography } from '../theme/typography';
+import { useTheme, type Theme } from '../theme/ThemeProvider';
 
 const highlights = [
   'Track sets, parts, minifigs, and MOCs across rooms and containers.',
@@ -11,6 +11,9 @@ const highlights = [
 ];
 
 export default function AboutScreen() {
+  const theme = useTheme();
+  const styles = useMemo(() => createStyles(theme), [theme]);
+
   return (
     <ScrollView
       style={styles.container}
@@ -46,56 +49,58 @@ export default function AboutScreen() {
   );
 }
 
-const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: colors.background,
-  },
-  content: {
-    padding: layout.spacingLg,
-  },
-  card: {
-    backgroundColor: colors.surface,
-    borderRadius: layout.radiusLg,
-    padding: layout.spacingLg,
-    borderWidth: 1,
-    borderColor: colors.border,
-  },
-  title: {
-    fontSize: typography.title,
-    fontWeight: '700',
-    color: colors.heading,
-    textAlign: 'center',
-  },
-  subtitle: {
-    fontSize: typography.caption,
-    color: colors.textMuted,
-    textAlign: 'center',
-    marginTop: layout.spacingXs,
-  },
-  divider: {
-    height: 1,
-    backgroundColor: colors.border,
-    marginVertical: layout.spacingMd,
-  },
-  body: {
-    fontSize: typography.body,
-    color: colors.text,
-    lineHeight: typography.body + 6,
-    marginBottom: layout.spacingSm,
-  },
-  featureList: {
-    marginTop: layout.spacingXs,
-    marginBottom: layout.spacingSm,
-    gap: layout.spacingXs,
-  },
-  featureItem: {
-    fontSize: typography.body,
-    color: colors.text,
-  },
-  footer: {
-    fontSize: typography.caption,
-    color: colors.textMuted,
-    marginTop: layout.spacingSm,
-  },
-});
+const createStyles = (theme: Theme) =>
+  StyleSheet.create({
+    container: {
+      flex: 1,
+      backgroundColor: theme.colors.background,
+    },
+    content: {
+      padding: layout.spacingLg,
+      paddingBottom: layout.spacingXl * 2,
+    },
+    card: {
+      backgroundColor: theme.colors.surface,
+      borderRadius: layout.radiusLg,
+      padding: layout.spacingLg,
+      borderWidth: 1,
+      borderColor: theme.colors.border,
+    },
+    title: {
+      fontSize: typography.title,
+      fontWeight: '700',
+      color: theme.colors.text,
+      textAlign: 'center',
+    },
+    subtitle: {
+      fontSize: typography.caption,
+      color: theme.colors.textSecondary,
+      textAlign: 'center',
+      marginTop: layout.spacingXs,
+    },
+    divider: {
+      height: 1,
+      backgroundColor: theme.colors.border,
+      marginVertical: layout.spacingMd,
+    },
+    body: {
+      fontSize: typography.body,
+      color: theme.colors.text,
+      lineHeight: typography.body + 6,
+      marginBottom: layout.spacingSm,
+    },
+    featureList: {
+      marginTop: layout.spacingXs,
+      marginBottom: layout.spacingSm,
+      gap: layout.spacingXs,
+    },
+    featureItem: {
+      fontSize: typography.body,
+      color: theme.colors.text,
+    },
+    footer: {
+      fontSize: typography.caption,
+      color: theme.colors.textSecondary,
+      marginTop: layout.spacingSm,
+    },
+  });

@@ -11,9 +11,9 @@ import {
 import { Button } from '../components/Button';
 import { Input } from '../components/Input';
 import { getDb } from '../db/database';
-import { colors } from '../theme/colors';
 import { layout } from '../theme/layout';
 import { typography } from '../theme/typography';
+import { useTheme, type Theme } from '../theme/ThemeProvider';
 
 type ContainerDetailParams = {
   containerId: number;
@@ -64,6 +64,8 @@ export default function ContainerDetailScreen({
   const [moveQty, setMoveQty] = useState('');
   const [moveError, setMoveError] = useState<string | null>(null);
   const [savingMove, setSavingMove] = useState(false);
+  const theme = useTheme();
+  const styles = useMemo(() => createStyles(theme), [theme]);
 
   useEffect(() => {
     if (!containerId) {
@@ -457,164 +459,170 @@ export default function ContainerDetailScreen({
   );
 }
 
-const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: colors.background,
-    padding: layout.spacingLg,
-  },
-  screenTitle: {
-    fontSize: typography.sectionTitle,
-    fontWeight: '700',
-    color: colors.heading,
-    marginBottom: layout.spacingSm,
-  },
-  bodyText: {
-    fontSize: typography.body,
-    color: colors.text,
-  },
-  bodyTextMuted: {
-    fontSize: typography.body,
-    color: colors.textMuted,
-  },
-  errorText: {
-    fontSize: typography.body,
-    color: colors.danger,
-  },
-  listContent: {
-    paddingBottom: layout.spacingLg,
-  },
-  card: {
-    backgroundColor: colors.surface,
-    borderRadius: layout.radiusMd,
-    padding: layout.spacingMd,
-    borderWidth: 1,
-    borderColor: colors.border,
-  },
-  row: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: layout.spacingSm,
-  },
-  title: {
-    fontSize: typography.body,
-    fontWeight: '600',
-    color: colors.heading,
-  },
-  subtitle: {
-    marginTop: layout.spacingXs / 2,
-    fontSize: typography.caption,
-    color: colors.textMuted,
-  },
-  qtyBadge: {
-    minWidth: 56,
-    paddingHorizontal: layout.spacingSm,
-    paddingVertical: layout.spacingXs,
-    borderRadius: layout.radiusMd,
-    backgroundColor: colors.background,
-    borderWidth: 1,
-    borderColor: colors.border,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  qtyText: {
-    fontSize: typography.body,
-    fontWeight: '700',
-    color: colors.text,
-  },
-  typeBadge: {
-    fontSize: typography.chipSmall,
-    fontWeight: '700',
-    color: colors.primary,
-    marginBottom: layout.spacingXs / 2,
-  },
-  cardActions: {
-    marginTop: layout.spacingSm,
-    flexDirection: 'row',
-    justifyContent: 'flex-end',
-  },
-  moveButton: {
-    minWidth: 100,
-  },
-  separator: {
-    height: layout.spacingSm,
-  },
-  modalOverlay: {
-    flex: 1,
-    backgroundColor: colors.modalBackdrop,
-    justifyContent: 'center',
-    alignItems: 'center',
-    padding: layout.spacingMd,
-  },
-  modalBackdrop: {
-    ...StyleSheet.absoluteFillObject,
-  },
-  modalCard: {
-    width: '100%',
-    maxWidth: 420,
-    backgroundColor: colors.surface,
-    borderRadius: layout.radiusMd,
-    borderWidth: 1,
-    borderColor: colors.border,
-    padding: layout.spacingLg,
-  },
-  modalTitle: {
-    fontSize: typography.sectionTitle,
-    fontWeight: '700',
-    color: colors.heading,
-    marginBottom: layout.spacingSm,
-  },
-  selector: {
-    borderWidth: 1,
-    borderColor: colors.border,
-    borderRadius: layout.radiusMd,
-    paddingHorizontal: layout.spacingMd,
-    paddingVertical: layout.spacingSm,
-    backgroundColor: colors.surface,
-    marginBottom: layout.spacingSm,
-  },
-  selectorLabel: {
-    fontSize: typography.caption,
-    color: colors.textMuted,
-    marginBottom: layout.spacingXs / 2,
-  },
-  selectorValueRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-  },
-  selectorValue: {
-    fontSize: typography.body,
-    color: colors.text,
-    fontWeight: '600',
-  },
-  containerList: {
-    maxHeight: 200,
-    marginBottom: layout.spacingSm,
-  },
-  containerListContent: {
-    paddingBottom: layout.spacingSm,
-  },
-  optionRow: {
-    paddingVertical: layout.spacingSm,
-    paddingHorizontal: layout.spacingMd,
-    borderRadius: layout.radiusSm,
-  },
-  optionRowActive: {
-    backgroundColor: colors.primarySoft,
-  },
-  optionText: {
-    fontSize: typography.body,
-    color: colors.text,
-  },
-  optionTextActive: {
-    color: colors.heading,
-    fontWeight: '700',
-  },
-  modalButtonRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    marginTop: layout.spacingSm,
-    gap: layout.spacingSm,
-  },
-});
+function createStyles(theme: Theme) {
+  const { colors } = theme;
+  const overlayColor = theme.mode === 'dark' ? '#000000CC' : '#00000055';
+  const softSurface = colors.surfaceAlt ?? colors.surface;
+  return StyleSheet.create({
+    container: {
+      flex: 1,
+      backgroundColor: colors.background,
+      padding: layout.spacingLg,
+    },
+    screenTitle: {
+      fontSize: typography.sectionTitle,
+      fontWeight: '700',
+      color: colors.text,
+      marginBottom: layout.spacingSm,
+    },
+    bodyText: {
+      fontSize: typography.body,
+      color: colors.text,
+    },
+    bodyTextMuted: {
+      fontSize: typography.body,
+      color: colors.textSecondary,
+    },
+    errorText: {
+      fontSize: typography.body,
+      color: colors.danger,
+    },
+    listContent: {
+      paddingBottom: layout.spacingXl * 2,
+    },
+    card: {
+      backgroundColor: colors.surface,
+      borderRadius: layout.radiusMd,
+      padding: layout.spacingMd,
+      borderWidth: 1,
+      borderColor: colors.border,
+    },
+    row: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: layout.spacingSm,
+    },
+    title: {
+      fontSize: typography.body,
+      fontWeight: '600',
+      color: colors.text,
+    },
+    subtitle: {
+      marginTop: layout.spacingXs / 2,
+      fontSize: typography.caption,
+      color: colors.textSecondary,
+    },
+    qtyBadge: {
+      minWidth: 56,
+      paddingHorizontal: layout.spacingSm,
+      paddingVertical: layout.spacingXs,
+      borderRadius: layout.radiusMd,
+      backgroundColor: colors.background,
+      borderWidth: 1,
+      borderColor: colors.border,
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+    qtyText: {
+      fontSize: typography.body,
+      fontWeight: '700',
+      color: colors.text,
+    },
+    typeBadge: {
+      fontSize: typography.chipSmall,
+      fontWeight: '700',
+      color: colors.accent,
+      marginBottom: layout.spacingXs / 2,
+    },
+    cardActions: {
+      marginTop: layout.spacingSm,
+      flexDirection: 'row',
+      justifyContent: 'flex-end',
+    },
+    moveButton: {
+      minWidth: 100,
+    },
+    separator: {
+      height: layout.spacingSm,
+    },
+    modalOverlay: {
+      flex: 1,
+      backgroundColor: overlayColor,
+      justifyContent: 'center',
+      alignItems: 'center',
+      padding: layout.spacingMd,
+    },
+    modalBackdrop: {
+      ...StyleSheet.absoluteFillObject,
+    },
+    modalCard: {
+      width: '100%',
+      maxWidth: 420,
+      backgroundColor: colors.surface,
+      borderRadius: layout.radiusMd,
+      borderWidth: 1,
+      borderColor: colors.border,
+      padding: layout.spacingLg,
+    },
+    modalTitle: {
+      fontSize: typography.sectionTitle,
+      fontWeight: '700',
+      color: colors.text,
+      marginBottom: layout.spacingSm,
+    },
+    selector: {
+      borderWidth: 1,
+      borderColor: colors.border,
+      borderRadius: layout.radiusMd,
+      paddingHorizontal: layout.spacingMd,
+      paddingVertical: layout.spacingSm,
+      backgroundColor: colors.surface,
+      marginBottom: layout.spacingSm,
+    },
+    selectorLabel: {
+      fontSize: typography.caption,
+      color: colors.textSecondary,
+      marginBottom: layout.spacingXs / 2,
+    },
+    selectorValueRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+    },
+    selectorValue: {
+      fontSize: typography.body,
+      color: colors.text,
+      fontWeight: '600',
+    },
+    containerList: {
+      maxHeight: 200,
+      marginBottom: layout.spacingSm,
+    },
+    containerListContent: {
+      paddingBottom: layout.spacingSm,
+    },
+    optionRow: {
+      paddingVertical: layout.spacingSm,
+      paddingHorizontal: layout.spacingMd,
+      borderRadius: layout.radiusSm,
+    },
+    optionRowActive: {
+      backgroundColor: softSurface,
+    },
+    optionText: {
+      fontSize: typography.body,
+      color: colors.text,
+    },
+    optionTextActive: {
+      color: colors.text,
+      fontWeight: '700',
+    },
+    modalButtonRow: {
+      flexDirection: 'row',
+      justifyContent: 'space-between',
+      marginTop: layout.spacingSm,
+      gap: layout.spacingSm,
+    },
+  });
+}
+

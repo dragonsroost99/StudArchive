@@ -16,15 +16,365 @@ export interface RebrickableSetMetadata {
   year?: number | null;
   numParts?: number | null;
   imageUrl: string | null;
+  themeId?: number | null;
+  themeName?: string | null;
+}
+
+export interface RebrickablePartSearchResult {
+  partNum: string;
+  name: string;
+  imageUrl: string | null;
+}
+
+export interface RebrickablePartColor {
+  colorId: number;
+  name: string;
+  isTransparent: boolean;
+  imageUrl: string | null;
 }
 
 const REBRICKABLE_API_KEY = '20c8f718caadb2f0e0eca2a30373592b';
 const REBRICKABLE_BASE_URL = 'https://rebrickable.com/api/v3/lego';
+const componentImageCache = new Map<string, string | null>();
+const partColorsCache = new Map<string, RebrickablePartColor[]>();
+const partColorsInFlight = new Map<string, Promise<RebrickablePartColor[]>>();
+let rateLimitUntil = 0;
+let lastRateLimitLog = 0;
+
+function isRateLimited(): boolean {
+  return Date.now() < rateLimitUntil;
+}
+
+function setRateLimitCooldown(seconds: number) {
+  rateLimitUntil = Date.now() + seconds * 1000;
+}
+
+function warnRateLimitedOnce() {
+  const now = Date.now();
+  if (now - lastRateLimitLog > 15_000) {
+    console.warn('[Rebrickable] Skipping image fetches due to recent 429 responses');
+    lastRateLimitLog = now;
+  }
+}
 
 function normalizeSetNumber(input: string): string {
   const trimmed = input.trim();
   if (!trimmed) return trimmed;
   return trimmed.includes('-') ? trimmed : `${trimmed}-1`;
+}
+
+function looksLikePartNumber(query: string): boolean {
+  const trimmed = query.trim();
+  if (!trimmed) return false;
+  if (trimmed.length > 10) return false;
+  if (/\s/.test(trimmed)) return false;
+  return /^[0-9A-Za-z]+$/.test(trimmed);
+}
+
+export async function fetchComponentImage(
+  designId: string,
+  subtype: 'part' | 'minifig',
+  colorName?: string | null
+): Promise<string | null> {
+  if (!designId.trim()) return null;
+  if (isRateLimited()) {
+    warnRateLimitedOnce();
+    return null;
+  }
+  const normalizedId = designId.trim();
+  const colorKey = (colorName ?? '').trim().toLowerCase();
+  const cacheKey = `${subtype}|${normalizedId}|${colorKey}`;
+  if (componentImageCache.has(cacheKey)) {
+    return componentImageCache.get(cacheKey) ?? null;
+  }
+
+  if (subtype === 'part' && colorKey) {
+    try {
+      const colors = await fetchPartColorsFromRebrickable(normalizedId);
+      const exact = colors.find(
+        c => (c.name ?? '').trim().toLowerCase() === colorKey
+      );
+      const partial = colors.find(
+        c => (c.name ?? '').trim().toLowerCase().includes(colorKey)
+      );
+      const matchUrl = exact?.imageUrl ?? partial?.imageUrl ?? null;
+      if (matchUrl) {
+        componentImageCache.set(cacheKey, matchUrl);
+        return matchUrl;
+      }
+    } catch (error) {
+      console.warn('Rebrickable color image lookup failed', { designId, colorName }, error);
+    }
+  }
+
+  const resource =
+    subtype === 'minifig'
+      ? `${REBRICKABLE_BASE_URL}/minifigs/${normalizedId}/`
+      : `${REBRICKABLE_BASE_URL}/parts/${normalizedId}/`;
+  const resourceWithKey =
+    subtype === 'minifig'
+      ? `${REBRICKABLE_BASE_URL}/minifigs/${normalizedId}/?key=${REBRICKABLE_API_KEY}`
+      : `${REBRICKABLE_BASE_URL}/parts/${normalizedId}/?key=${REBRICKABLE_API_KEY}`;
+  try {
+    const response = await fetch(resource, {
+      headers: {
+        Authorization: `key ${REBRICKABLE_API_KEY}`,
+        Accept: 'application/json',
+        'User-Agent': 'StudArchive/1.0',
+      },
+    });
+    const text = await response.text();
+    if (response.status === 429) {
+      setRateLimitCooldown(60);
+      console.warn('Rebrickable component image fetch throttled 429', resource);
+      componentImageCache.set(cacheKey, null);
+      return null;
+    }
+    if (response.status === 403) {
+      console.warn('Rebrickable component image fetch blocked (403)', {
+        resource,
+        status: response.status,
+      });
+      componentImageCache.set(cacheKey, null);
+      return null;
+    }
+    if (!response.ok) {
+      console.warn('Rebrickable component image fetch failed', response.status, text);
+      componentImageCache.set(cacheKey, null);
+      return null;
+    }
+    try {
+      const data = JSON.parse(text) as {
+        part_img_url?: string | null;
+        set_img_url?: string | null;
+        fig_img_url?: string | null;
+      };
+      const resolved =
+        data.part_img_url ?? data.fig_img_url ?? data.set_img_url ?? null;
+      componentImageCache.set(cacheKey, resolved);
+      return resolved;
+    } catch (error) {
+      console.warn('Rebrickable component image parse failed', text);
+      componentImageCache.set(cacheKey, null);
+      return null;
+    }
+  } catch (error) {
+    console.warn('Rebrickable component image fetch error', error);
+    componentImageCache.set(cacheKey, null);
+    return null;
+  }
+}
+
+export async function searchPartsOnRebrickable(
+  query: string
+): Promise<RebrickablePartSearchResult[]> {
+  const trimmed = query.trim();
+  if (!trimmed) return [];
+  const commonHeaders: Record<string, string> = {
+    Accept: 'application/json',
+    'User-Agent': 'StudArchive/1.0',
+    'X-Requested-With': 'XMLHttpRequest',
+  };
+
+  const url = `${REBRICKABLE_BASE_URL}/parts/?search=${encodeURIComponent(trimmed)}&page_size=20`;
+  try {
+    const response = await fetch(url, {
+      headers: { ...commonHeaders, Authorization: `key ${REBRICKABLE_API_KEY}` },
+    });
+    const text = await response.text();
+    if (response.status === 403) {
+      console.warn('Rebrickable part search blocked (403)', url);
+      return [];
+    }
+    if (!response.ok) {
+      console.warn('Rebrickable part search failed', response.status, text);
+      return [];
+    }
+    return parsePartSearchResults(trimmed, text);
+  } catch (error) {
+    console.warn('Rebrickable part search error', error);
+    return [];
+  }
+}
+
+function parsePartSearchResults(
+  query: string,
+  responseText: string
+): RebrickablePartSearchResult[] {
+  type PartSearchRow = { part_num?: string; name?: string; part_img_url?: string | null };
+  type PartSearchResponse = { results?: PartSearchRow[] };
+  let data: PartSearchResponse;
+  try {
+    data = JSON.parse(responseText) as PartSearchResponse;
+  } catch (error) {
+    console.warn('Rebrickable part search JSON parse failed', responseText);
+    return [];
+  }
+  const rows = data.results ?? [];
+  const mapped = rows
+    .filter(r => r?.part_num && r?.name)
+    .map(r => ({
+      partNum: r.part_num as string,
+      name: r.name as string,
+      imageUrl: r.part_img_url ?? null,
+    }));
+
+  const q = query.toLowerCase();
+  const score = (result: RebrickablePartSearchResult): number => {
+    const pn = result.partNum.toLowerCase();
+    const nm = result.name.toLowerCase();
+    if (pn === q) return 0;
+    if (pn.startsWith(q)) return 1;
+    if (nm.startsWith(q)) return 2;
+    if (nm.includes(q)) return 3;
+    return 4;
+  };
+  return mapped.sort((a, b) => score(a) - score(b));
+}
+
+export async function fetchPartColorsFromRebrickable(
+  partNum: string
+): Promise<RebrickablePartColor[]> {
+  const trimmed = partNum.trim();
+  if (!trimmed) {
+    console.warn('[Rebrickable] fetchPartColors called with empty partNum');
+    return [];
+  }
+  if (isRateLimited()) {
+    warnRateLimitedOnce();
+    return [];
+  }
+
+  const cached = partColorsCache.get(trimmed);
+  if (cached) return cached;
+
+  const inFlight = partColorsInFlight.get(trimmed);
+  if (inFlight) return inFlight;
+
+  const baseUrl = `${REBRICKABLE_BASE_URL}/parts/${encodeURIComponent(
+    trimmed
+  )}/colors/?page_size=1000`;
+  const url = `${baseUrl}&key=${REBRICKABLE_API_KEY}`;
+
+  console.log('[Rebrickable] Fetching colors for partNum', trimmed, url);
+
+  type RawPartColorsResponse = {
+    results?: {
+      color?: {
+        id?: number;
+        name?: string;
+        is_trans?: boolean | number | null;
+      };
+      color_id?: number;
+      color_name?: string;
+      is_trans?: boolean | number | null;
+      part?: { part_img_url?: string | null };
+      part_img_url?: string | null;
+    }[];
+  };
+
+  const promise = (async () => {
+    try {
+      const response = await fetch(url, {
+        method: 'GET',
+        headers: {
+          Accept: 'application/json',
+          'User-Agent': 'StudArchive/1.0',
+          Authorization: `key ${REBRICKABLE_API_KEY}`,
+        },
+      });
+
+      if (!response.ok) {
+        console.warn('[Rebrickable] Part colors request failed', {
+          partNum: trimmed,
+          status: response.status,
+          statusText: response.statusText,
+        });
+        return [];
+      }
+
+      let data: RawPartColorsResponse;
+      try {
+        data = (await response.json()) as RawPartColorsResponse;
+      } catch (e) {
+        console.warn('[Rebrickable] Failed to parse part colors JSON', { partNum: trimmed, e });
+        return [];
+      }
+
+      const mapped = mapColorsResponseToRebrickablePartColors(data);
+      partColorsCache.set(trimmed, mapped);
+      return mapped;
+    } catch (error) {
+      console.warn('[Rebrickable] Failed to fetch or parse part colors', {
+        partNum: trimmed,
+        error,
+      });
+      return [];
+    } finally {
+      partColorsInFlight.delete(trimmed);
+    }
+  })();
+
+  partColorsInFlight.set(trimmed, promise);
+  return promise;
+}
+
+type RawPartColorsResponse = {
+  results?: {
+    color?: {
+      id?: number;
+      name?: string;
+      is_trans?: boolean | number | null;
+    };
+    color_id?: number;
+    color_name?: string;
+    is_trans?: boolean | number | null;
+    part?: { part_img_url?: string | null };
+    part_img_url?: string | null;
+  }[];
+};
+
+function mapColorsResponseToRebrickablePartColors(
+  data: RawPartColorsResponse
+): RebrickablePartColor[] {
+  if (!Array.isArray(data.results)) {
+    console.warn('[Rebrickable] Unexpected part colors response shape', { data });
+    return [];
+  }
+
+  const mapped: RebrickablePartColor[] = [];
+
+  for (const entry of data.results) {
+    const colorImage =
+      (entry as any)?.part?.part_img_url ??
+      (entry as any)?.part_img_url ??
+      null;
+    if (entry?.color && entry.color.id != null && entry.color.name) {
+      mapped.push({
+        colorId: entry.color.id,
+        name: entry.color.name,
+        isTransparent: entry.color.is_trans === true || entry.color.is_trans === 1,
+        imageUrl: colorImage,
+      });
+      continue;
+    }
+    if (entry?.color_id != null && entry?.color_name) {
+      mapped.push({
+        colorId: entry.color_id,
+        name: entry.color_name,
+        isTransparent: entry.is_trans === true || entry.is_trans === 1,
+        imageUrl: colorImage,
+      });
+    }
+  }
+
+  if (mapped.length === 0) {
+    console.warn('[Rebrickable] Part colors response had results, but no mappable colors', {
+      data,
+    });
+  }
+
+  return mapped;
 }
 
 export async function fetchSetMetadataFromRebrickable(
@@ -58,6 +408,7 @@ export async function fetchSetMetadataFromRebrickable(
     year?: number | null;
     num_parts?: number | null;
     set_img_url?: string | null;
+    theme_id?: number | null;
   };
 
   let data: RebrickableSetResponse;
@@ -68,12 +419,47 @@ export async function fetchSetMetadataFromRebrickable(
     throw error;
   }
 
+  const themeId = data.theme_id ?? null;
+  let themeName: string | null = null;
+  if (themeId !== null && Number.isFinite(themeId)) {
+    const themeUrl = `${REBRICKABLE_BASE_URL}/themes/${themeId}/`;
+    try {
+      const themeResponse = await fetch(themeUrl, {
+        headers: {
+          Authorization: `key ${REBRICKABLE_API_KEY}`,
+          Accept: 'application/json',
+        },
+      });
+      const themeText = await themeResponse.text();
+      if (themeResponse.ok) {
+        try {
+          const parsed = JSON.parse(themeText) as { name?: string | null };
+          themeName = parsed?.name ?? null;
+        } catch (error) {
+          console.warn('Rebrickable theme JSON parse error', themeText);
+          themeName = null;
+        }
+      } else {
+        console.warn(
+          'Rebrickable theme fetch failed',
+          themeResponse.status,
+          themeText
+        );
+      }
+    } catch (error) {
+      console.warn('Rebrickable theme fetch failed', error);
+      themeName = null;
+    }
+  }
+
   return {
     name: data.name ?? normalized,
     setNum: data.set_num ?? normalized,
     year: data.year ?? null,
     numParts: data.num_parts ?? null,
     imageUrl: data.set_img_url ?? null,
+    themeId,
+    themeName,
   };
 }
 
@@ -105,6 +491,7 @@ export async function fetchInventoryFromRebrickable(
     is_spare: boolean;
     part: { part_num: string; name: string };
     color: { name: string };
+    part_img_url?: string | null;
   };
 
   type RebrickablePartsResponse = {
@@ -130,7 +517,7 @@ export async function fetchInventoryFromRebrickable(
     quantity: p.quantity ?? 0,
     designId: p.part?.part_num ?? null,
     isSpare: !!p.is_spare,
-    imageUrl: (p as any)?.part_img_url ?? null,
+    imageUrl: p.part_img_url ?? (p as any)?.part?.part_img_url ?? null,
   }));
 
   // Try to fetch minifigs; if it fails, just return parts.
@@ -173,6 +560,7 @@ function dedupeBuildParts(parts: BuildPart[]): BuildPart[] {
       quantity: number;
       designId?: string | null;
       isSpare: boolean;
+      imageUrl?: string | null;
     }
   >();
 
@@ -189,6 +577,7 @@ function dedupeBuildParts(parts: BuildPart[]): BuildPart[] {
       map.set(key, {
         ...existing,
         quantity: (existing.quantity ?? 0) + (p.quantity ?? 0),
+        imageUrl: existing.imageUrl || p.imageUrl || null,
       });
     } else {
       map.set(key, {
@@ -198,6 +587,7 @@ function dedupeBuildParts(parts: BuildPart[]): BuildPart[] {
         quantity: p.quantity ?? 0,
         designId: p.designId ?? null,
         isSpare: !!p.isSpare,
+        imageUrl: p.imageUrl ?? null,
       });
     }
   }

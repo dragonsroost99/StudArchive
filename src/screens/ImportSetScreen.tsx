@@ -10,7 +10,6 @@ import {
 import { Input } from '../components/Input';
 import { Button } from '../components/Button';
 import { getDb } from '../db/database';
-import { colors } from '../theme/colors';
 import { layout } from '../theme/layout';
 import { typography } from '../theme/typography';
 import {
@@ -18,6 +17,7 @@ import {
   fetchSetMetadataFromRebrickable,
   type BuildPart,
 } from '../services/inventoryImport/rebrickable';
+import { useTheme, type Theme } from '../theme/ThemeProvider';
 
 type ImportSetScreenProps = {
   onImported?: (itemId: number) => void;
@@ -31,6 +31,10 @@ export default function ImportSetScreen({ onImported }: ImportSetScreenProps) {
   const [selectedContainerId, setSelectedContainerId] = useState<number | null>(null);
   const [loading, setLoading] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const theme = useTheme();
+  const styles = useMemo(() => createStyles(theme), [theme]);
+  const invalidSetMessage =
+    "No LEGO set by that number was found.\n\nMake sure you included the correct digits (like '75192' or '75192-1').";
 
   useEffect(() => {
     let isMounted = true;
@@ -68,9 +72,9 @@ export default function ImportSetScreen({ onImported }: ImportSetScreenProps) {
       await db.runAsync(
         `
           INSERT INTO build_parts
-            (parent_item_id, component_subtype, component_name, component_color, component_number, quantity, is_spare)
+            (parent_item_id, component_subtype, component_name, component_color, component_number, quantity, is_spare, image_uri)
           VALUES
-            (?, ?, ?, ?, ?, ?, ?);
+            (?, ?, ?, ?, ?, ?, ?, ?);
         `,
         [
           parentId,
@@ -80,6 +84,7 @@ export default function ImportSetScreen({ onImported }: ImportSetScreenProps) {
           p.designId || null,
           p.quantity ?? 0,
           p.isSpare ? 1 : 0,
+          p.imageUrl || null,
         ]
       );
     }
@@ -100,9 +105,10 @@ export default function ImportSetScreen({ onImported }: ImportSetScreenProps) {
       ]);
 
       if (!metadata || !parts || parts.length === 0) {
-        setErrorMessage('Could not import this set. Check the set number and try again.');
+        setErrorMessage(invalidSetMessage);
         return;
       }
+      const theme = metadata.themeName ?? null;
 
       const db = await getDb();
       await db.execAsync('BEGIN TRANSACTION;');
@@ -122,7 +128,7 @@ export default function ImportSetScreen({ onImported }: ImportSetScreenProps) {
             1,
             null,
             null,
-            null,
+            theme,
             null,
             null,
             null,
@@ -151,7 +157,7 @@ export default function ImportSetScreen({ onImported }: ImportSetScreenProps) {
       }
     } catch (error) {
       console.error('Import set failed', error);
-      setErrorMessage('Could not import this set. Check the set number and try again.');
+      setErrorMessage(invalidSetMessage);
     } finally {
       setLoading(false);
     }
@@ -220,8 +226,7 @@ export default function ImportSetScreen({ onImported }: ImportSetScreenProps) {
           <View style={styles.modalCard}>
             <Text style={styles.modalTitle}>Import Error</Text>
             <Text style={styles.modalBody}>
-              {errorMessage ??
-                'Could not import this set. Check the set number and try again.'}
+              {errorMessage ?? invalidSetMessage}
             </Text>
             <Button
               label="OK"
@@ -235,88 +240,92 @@ export default function ImportSetScreen({ onImported }: ImportSetScreenProps) {
   );
 }
 
-const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: colors.background,
-  },
-  modalOverlay: {
-    flex: 1,
-    backgroundColor: colors.modalBackdrop,
-    justifyContent: 'center',
-    alignItems: 'center',
-    padding: layout.spacingLg,
-  },
-  modalCard: {
-    width: '100%',
-    maxWidth: 420,
-    backgroundColor: colors.surface,
-    borderRadius: layout.radiusMd,
-    borderWidth: 1,
-    borderColor: colors.border,
-    padding: layout.spacingLg,
-  },
-  modalTitle: {
-    fontSize: typography.sectionTitle,
-    fontWeight: '700',
-    color: colors.heading,
-    marginBottom: layout.spacingSm,
-  },
-  modalBody: {
-    fontSize: typography.body,
-    color: colors.text,
-  },
-  content: {
-    padding: layout.spacingLg,
-  },
-  card: {
-    backgroundColor: colors.surface,
-    borderRadius: layout.radiusLg,
-    padding: layout.spacingLg,
-    borderWidth: 1,
-    borderColor: colors.border,
-    gap: layout.spacingSm,
-  },
-  title: {
-    fontSize: typography.title,
-    fontWeight: '700',
-    color: colors.heading,
-  },
-  subtitle: {
-    fontSize: typography.body,
-    color: colors.text,
-    lineHeight: typography.body + 4,
-  },
-  selector: {
-    borderWidth: 1,
-    borderColor: colors.border,
-    borderRadius: layout.radiusMd,
-    paddingHorizontal: layout.spacingMd,
-    paddingVertical: layout.spacingSm,
-    backgroundColor: colors.surface,
-    gap: layout.spacingSm,
-  },
-  selectorLabel: {
-    fontSize: typography.caption,
-    color: colors.textMuted,
-  },
-  optionList: {
-    gap: layout.spacingXs,
-  },
-  optionRow: {
-    paddingVertical: layout.spacingSm,
-    paddingHorizontal: layout.spacingSm,
-    borderRadius: layout.radiusSm,
-  },
-  optionRowActive: {
-    backgroundColor: colors.primarySoft,
-  },
-  optionText: {
-    fontSize: typography.body,
-    color: colors.text,
-  },
-  optionTextActive: {
-    color: colors.heading,
-    fontWeight: '700',
-  },
-});
+function createStyles(theme: Theme) {
+  const { colors } = theme;
+  return StyleSheet.create({
+    container: {
+      flex: 1,
+      backgroundColor: colors.background,
+    },
+    modalOverlay: {
+      flex: 1,
+      backgroundColor: colors.surfaceAlt ?? colors.background,
+      justifyContent: 'center',
+      alignItems: 'center',
+      padding: layout.spacingLg,
+    },
+    modalCard: {
+      width: '100%',
+      maxWidth: 420,
+      backgroundColor: colors.surface,
+      borderRadius: layout.radiusMd,
+      borderWidth: 1,
+      borderColor: colors.border,
+      padding: layout.spacingLg,
+    },
+    modalTitle: {
+      fontSize: typography.sectionTitle,
+      fontWeight: '700',
+      color: colors.text,
+      marginBottom: layout.spacingSm,
+    },
+    modalBody: {
+      fontSize: typography.body,
+      color: colors.text,
+    },
+    content: {
+      padding: layout.spacingLg,
+      paddingBottom: layout.spacingXl * 2,
+    },
+    card: {
+      backgroundColor: colors.surface,
+      borderRadius: layout.radiusLg,
+      padding: layout.spacingLg,
+      borderWidth: 1,
+      borderColor: colors.border,
+      gap: layout.spacingSm,
+    },
+    title: {
+      fontSize: typography.title,
+      fontWeight: '700',
+      color: colors.text,
+    },
+    subtitle: {
+      fontSize: typography.body,
+      color: colors.textSecondary,
+      lineHeight: typography.body + 4,
+    },
+    selector: {
+      borderWidth: 1,
+      borderColor: colors.border,
+      borderRadius: layout.radiusMd,
+      paddingHorizontal: layout.spacingMd,
+      paddingVertical: layout.spacingSm,
+      backgroundColor: colors.surface,
+      gap: layout.spacingSm,
+    },
+    selectorLabel: {
+      fontSize: typography.caption,
+      color: colors.textSecondary,
+    },
+    optionList: {
+      gap: layout.spacingXs,
+    },
+    optionRow: {
+      paddingVertical: layout.spacingSm,
+      paddingHorizontal: layout.spacingSm,
+      borderRadius: layout.radiusSm,
+    },
+    optionRowActive: {
+      backgroundColor: colors.surfaceAlt ?? colors.surface,
+    },
+    optionText: {
+      fontSize: typography.body,
+      color: colors.text,
+    },
+    optionTextActive: {
+      color: colors.text,
+      fontWeight: '700',
+    },
+  });
+}

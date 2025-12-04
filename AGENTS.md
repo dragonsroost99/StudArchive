@@ -10,6 +10,7 @@ StudArchive is an **Expo + React Native + TypeScript** app that tracks a LEGO co
 1. Accuracy – don’t break working behavior.
 2. Minimal, targeted changes – only change what the user asked for.
 3. Consistency – follow existing patterns, naming, and folder structure.
+4. All new or updated input-heavy screens should be keyboard-aware (e.g., wrap with KeyboardAvoidingView and use keyboardShouldPersistTaps where appropriate).
 
 ## Tech & Structure
 

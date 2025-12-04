@@ -3,7 +3,7 @@
  * Initializes the SQLite-backed data model and drives the in-screen navigation flow (rooms -> containers -> items) via local state.
  * Renders the main sections: status/header, room selector, container selector, and item list with CRUD modals.
  */
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useMemo } from 'react';
 import {
   View,
   Text,
@@ -59,7 +59,10 @@ import ContainerDetailScreen from './src/screens/ContainerDetailScreen';
 import ImportSetScreen from './src/screens/ImportSetScreen';
 import CreateMocScreen from './src/screens/CreateMocScreen';
 import AddPartsScreen from './src/screens/AddPartsScreen';
+import BuildComponentDetailScreen from './src/screens/BuildComponentDetailScreen';
 import { fetchSetMetadataFromRebrickable } from './src/services/inventoryImport/rebrickable';
+import SettingsScreen from './src/screens/SettingsScreen';
+import { ThemeProvider, useTheme } from './src/theme/ThemeProvider';
 
 type ItemConditionKey = 'new' | 'used' | 'mixed' | 'unknown';
 type ScreenName =
@@ -71,9 +74,19 @@ type ScreenName =
   | 'containerDetail'
   | 'importSet'
   | 'createMoc'
-  | 'addParts';
+  | 'addParts'
+  | 'buildComponentDetail'
+  | 'settings';
 
 export default function App() {
+  return (
+    <ThemeProvider>
+      <AppContent />
+    </ThemeProvider>
+  );
+}
+
+function AppContent() {
   const [status, setStatus] = useState<'checking' | 'ok' | 'error'>('checking');
   const [message, setMessage] = useState('Initializing database…');
   const [currentScreen, setCurrentScreen] = useState<ScreenName>('home');
@@ -82,11 +95,17 @@ export default function App() {
     useState<PartDetailParams | null>(null);
   const [editPartParams, setEditPartParams] =
     useState<PartDetailParams | null>(null);
+  const [buildComponentDetailParams, setBuildComponentDetailParams] = useState<{
+    buildPartId: number;
+    parentItemId: number;
+  } | null>(null);
   const [containerDetailParams, setContainerDetailParams] = useState<{
     containerId: number;
     containerName?: string;
   } | null>(null);
   const [partDetailRefreshKey, setPartDetailRefreshKey] = useState(0);
+  const theme = useTheme();
+  const styles = useMemo(() => createStyles(), [theme]);
 
   // Rooms
   const [rooms, setRooms] = useState<Room[]>([]);
@@ -256,14 +275,28 @@ export default function App() {
 
   async function handleAddRoom() {
     try {
-      if (!newRoomName.trim()) return;
-      await createRoom(newRoomName.trim());
+      const trimmed = newRoomName.trim();
+      if (!trimmed) return;
+      const exists = rooms.some(r => r.name.trim().toLowerCase() === trimmed.toLowerCase());
+      if (exists) {
+        setRoomsError('A room with that name already exists.');
+        Alert.alert('Duplicate room', 'A room with that name already exists. Choose another.');
+        return;
+      }
+      await createRoom(trimmed);
       setNewRoomName('Office');
       await refreshRooms();
       setRoomModalVisible(false);
     } catch (e: any) {
       console.error(e);
+      const message = String(e?.message ?? '');
+      if (message.includes('UNIQUE')) {
+        setRoomsError('A room with that name already exists.');
+        Alert.alert('Duplicate room', 'A room with that name already exists. Choose another.');
+        return;
+      }
       setRoomsError(e?.message ?? 'Failed to add room');
+      Alert.alert('Unable to add room', e?.message ?? 'Please try again.');
     }
   }
 
@@ -606,6 +639,10 @@ export default function App() {
       setNewItemNameTyped(true);
       setNewItemNumber(metadata.setNum ?? candidate);
       setNewItemNumberTyped(true);
+      if (metadata.themeName) {
+        setNewItemCategory(metadata.themeName);
+        setNewItemCategoryTyped(true);
+      }
       if (!newItemImageUri.trim() && metadata.imageUrl) {
         setNewItemImageUri(metadata.imageUrl);
         setNewItemImageUriTyped(true);
@@ -741,6 +778,39 @@ export default function App() {
             setPartDetailParams(params);
             navigateTo('partDetail');
           }}
+          onNavigateToBuildComponent={({ buildPartId, parentItemId }) => {
+            setBuildComponentDetailParams({ buildPartId, parentItemId });
+            navigateTo('buildComponentDetail');
+          }}
+        />
+      </View>
+    );
+  }
+
+  if (currentScreen === 'buildComponentDetail') {
+    return (
+      <View style={styles.aboutWrapper}>
+        <View style={styles.aboutHeaderRow}>
+          <Text style={styles.headerTitle}>Component Detail</Text>
+          <View style={styles.headerActionsRow}>
+            <Button
+              label="Back"
+              variant="outline"
+              onPress={goBack}
+              style={styles.headerButton}
+            />
+            <Button
+              label="Home"
+              variant="outline"
+              onPress={goHome}
+              style={styles.headerButton}
+            />
+          </View>
+        </View>
+        <BuildComponentDetailScreen
+          params={buildComponentDetailParams ?? undefined}
+          onClose={goBack}
+          onHome={goHome}
         />
       </View>
     );
@@ -901,6 +971,31 @@ export default function App() {
     );
   }
 
+  if (currentScreen === 'settings') {
+    return (
+      <View style={styles.aboutWrapper}>
+        <View style={styles.aboutHeaderRow}>
+          <Text style={styles.headerTitle}>Settings</Text>
+          <View style={styles.headerActionsRow}>
+            <Button
+              label="Back"
+              variant="outline"
+              onPress={goBack}
+              style={styles.headerButton}
+            />
+            <Button
+              label="Home"
+              variant="outline"
+              onPress={goHome}
+              style={styles.headerButton}
+            />
+          </View>
+        </View>
+        <SettingsScreen />
+      </View>
+    );
+  }
+
   if (currentScreen === 'editPart') {
     return (
       <View style={styles.aboutWrapper}>
@@ -961,14 +1056,21 @@ export default function App() {
   return (
     <>
       <ScrollView
-        style={styles.container}
+        style={[styles.container, { backgroundColor: theme.colors.background }]}
         contentContainerStyle={styles.scrollContent}
         keyboardShouldPersistTaps="handled"
       >
         {/* Header */}
-        <View style={styles.headerCard}>
-          <Text style={styles.appTitle}>StudArchive</Text>
-          <Text style={styles.appSubtitle}>Keep your bricks in line</Text>
+        <View
+          style={[
+            styles.headerCard,
+            { backgroundColor: theme.colors.surface, borderColor: theme.colors.border },
+          ]}
+        >
+          <Text style={[styles.appTitle, { color: theme.colors.text }]}>StudArchive</Text>
+          <Text style={[styles.appSubtitle, { color: theme.colors.textSecondary }]}>
+            Keep your bricks in line
+          </Text>
           <View style={styles.headerDivider} />
           <Text
             style={[
@@ -978,6 +1080,7 @@ export default function App() {
                 : status === 'error'
                 ? styles.statusError
                 : null,
+              { color: theme.colors.text },
             ]}
           >
             {message}
@@ -1000,6 +1103,12 @@ export default function App() {
               setPartDetailParams(null);
               navigateTo('partList');
             }}
+            style={styles.aboutButton}
+          />
+          <Button
+            label="Settings"
+            variant="outline"
+            onPress={() => navigateTo('settings')}
             style={styles.aboutButton}
           />
         </View>
@@ -1183,7 +1292,9 @@ export default function App() {
                 keyExtractor={item => item.id.toString()}
                 renderItem={({ item }) => {
                   const extras: string[] = [];
-                  if (item.color) extras.push(item.color);
+                  const typeKey = (item.type ?? '').toLowerCase();
+                  const isSetOrMoc = typeKey === 'set' || typeKey === 'moc';
+                  if (item.color) extras.push(isSetOrMoc ? 'Varied' : item.color);
                   if (item.condition) extras.push(item.condition);
                   if (item.value_total != null) {
                     extras.push(`$${item.value_total.toFixed(2)}`);
@@ -1433,23 +1544,6 @@ export default function App() {
                   placeholder="Category (optional)"
                 />
                 <Input
-                  label="Description"
-                  value={newItemDescription}
-                  onChangeText={text =>
-                    handleFirstType(
-                      text,
-                      newItemDescription,
-                      newItemDescriptionTyped,
-                      setNewItemDescriptionTyped,
-                      setNewItemDescription
-                    )
-                  }
-                  placeholder="Description (optional)"
-                  multiline
-                  numberOfLines={3}
-                  style={{ minHeight: 90 }}
-                />
-                <Input
                   label="Image URL"
                   value={newItemImageUri}
                   onChangeText={text =>
@@ -1533,7 +1627,8 @@ export default function App() {
 
 // ---------- STYLES ----------
 
-const styles = StyleSheet.create({
+function createStyles() {
+  return StyleSheet.create({
   container: {
     flex: 1,
     paddingTop: 56,
@@ -1857,4 +1952,5 @@ const styles = StyleSheet.create({
     marginTop: layout.spacingSm,
   },
 });
+}
 

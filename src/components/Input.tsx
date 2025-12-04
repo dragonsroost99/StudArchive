@@ -1,8 +1,8 @@
 import React, { useMemo, useState } from 'react';
 import { TextInput, TextInputProps, View, Text, StyleSheet } from 'react-native';
-import { colors } from '../theme/colors';
 import { layout } from '../theme/layout';
 import { typography } from '../theme/typography';
+import { useTheme, type Theme } from '../theme/ThemeProvider';
 
 interface InputProps extends TextInputProps {
   label?: string;
@@ -37,6 +37,9 @@ export function Input({
     !!currentValue &&
     currentValue.length > 0;
 
+  const theme = useTheme();
+  const styles = useMemo(() => createStyles(theme), [theme]);
+
   const inputTextStyle = useMemo(
     () => [
       styles.input,
@@ -53,7 +56,7 @@ export function Input({
       <TextInput
         {...rest}
         style={inputTextStyle}
-        placeholderTextColor={colors.textMuted}
+        placeholderTextColor={theme.colors.textSecondary}
         onChangeText={text => {
           let nextValue = text;
           if (clearOnFirstKeystroke && focused && !hasTyped) {
@@ -80,32 +83,35 @@ export function Input({
   );
 }
 
-const styles = StyleSheet.create({
-  container: {
-    width: '100%',
-    marginBottom: layout.spacingSm,
-  },
-  label: {
-    fontSize: typography.caption,
-    color: colors.textMuted,
-    marginBottom: layout.spacingXs / 2,
-  },
-  input: {
-    width: '100%',
-    borderWidth: 1,
-    borderColor: colors.border,
-    borderRadius: layout.radiusMd,
-    paddingHorizontal: layout.spacingMd,
-    paddingVertical: layout.spacingSm,
-    fontSize: typography.body + 1,
-    backgroundColor: colors.background,
-    color: colors.text,
-  },
-  inputFocused: {
-    borderColor: colors.primary,
-  },
-  overwriteText: {
-    color: colors.textMuted,
-    fontStyle: 'italic',
-  },
-});
+function createStyles(theme: Theme) {
+  const { colors } = theme;
+  return StyleSheet.create({
+    container: {
+      width: '100%',
+      marginBottom: layout.spacingSm,
+    },
+    label: {
+      fontSize: typography.caption,
+      color: colors.textSecondary,
+      marginBottom: layout.spacingXs / 2,
+    },
+    input: {
+      width: '100%',
+      borderWidth: 1,
+      borderColor: colors.border,
+      borderRadius: layout.radiusMd,
+      paddingHorizontal: layout.spacingMd,
+      paddingVertical: layout.spacingSm,
+      fontSize: typography.body + 1,
+      backgroundColor: colors.surface,
+      color: colors.text,
+    },
+    inputFocused: {
+      borderColor: colors.accent,
+    },
+    overwriteText: {
+      color: colors.textSecondary,
+      fontStyle: 'italic',
+    },
+  });
+}

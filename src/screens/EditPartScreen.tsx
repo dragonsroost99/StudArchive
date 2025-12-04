@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+﻿import React, { useEffect, useMemo, useState } from 'react';
 import {
   KeyboardAvoidingView,
   Modal,
@@ -12,9 +12,9 @@ import {
 import { Input } from '../components/Input';
 import { Button } from '../components/Button';
 import { getDb } from '../db/database';
-import { colors } from '../theme/colors';
 import { layout } from '../theme/layout';
 import { typography } from '../theme/typography';
+import { useTheme, type Theme } from '../theme/ThemeProvider';
 
 export type EditPartParams = {
   partId: string;
@@ -62,6 +62,8 @@ export default function EditPartScreen({
   const [description, setDescription] = useState('');
   const [quantity, setQuantity] = useState('');
   const [imageUri, setImageUri] = useState('');
+  const theme = useTheme();
+  const styles = useMemo(() => createStyles(theme), [theme]);
   const [selectedContainerId, setSelectedContainerId] = useState<number | null>(
     null
   );
@@ -149,14 +151,15 @@ export default function EditPartScreen({
         const rows = await db.getAllAsync<{
           id: number;
           name: string;
-          room_name: string | null;
+          roomName: string | null;
         }>(
           `
             SELECT
               c.id,
               c.name,
-              NULL AS room_name
+              r.name AS roomName
             FROM containers c
+            LEFT JOIN rooms r ON r.id = c.room_id
             ORDER BY c.name ASC;
           `
         );
@@ -176,7 +179,7 @@ export default function EditPartScreen({
     if (selectedContainerId == null) return 'No container';
     const match = containers.find(c => c.id === selectedContainerId);
     if (!match) return 'No container';
-    return match.roomName ? `${match.roomName} · ${match.name}` : match.name;
+    return match.roomName ? `${match.roomName} - ${match.name}` : match.name;
   }, [containers, selectedContainerId]);
 
   async function handleSave() {
@@ -261,6 +264,7 @@ export default function EditPartScreen({
         style={styles.container}
         contentContainerStyle={styles.content}
         keyboardShouldPersistTaps="handled"
+        keyboardDismissMode="on-drag"
       >
         <View style={styles.card}>
           <Text style={styles.title}>Edit Part</Text>
@@ -299,26 +303,16 @@ export default function EditPartScreen({
             />
           ) : null}
           <Input
-            label={isSetType ? 'Theme' : 'Category'}
-            value={categoryName}
-            editable={!loading}
-            onChangeText={setCategoryName}
-            placeholder={isSetType ? 'Enter theme' : 'Enter category'}
-          />
-          <Input
-            label="Description"
-            value={description}
-            editable={!loading}
-            onChangeText={setDescription}
-            placeholder="Enter description"
-            multiline
-            numberOfLines={3}
-            style={styles.multilineInput}
-          />
-          <Input
-            label="Image URL"
-            value={imageUri}
-            editable={!loading}
+          label={isSetType ? 'Theme' : 'Category'}
+          value={categoryName}
+          editable={!loading}
+          onChangeText={setCategoryName}
+          placeholder={isSetType ? 'Enter theme' : 'Enter category'}
+        />
+        <Input
+          label="Image URL"
+          value={imageUri}
+          editable={!loading}
             onChangeText={setImageUri}
             placeholder="https://example.com/image.jpg (optional)"
             autoCapitalize="none"
@@ -396,7 +390,7 @@ export default function EditPartScreen({
             {containers.map(option => {
               const isActive = option.id === selectedContainerId;
               const label = option.roomName
-                ? `${option.roomName} · ${option.name}`
+                ? `${option.roomName} - ${option.name}`
                 : option.name;
               return (
                 <TouchableOpacity
@@ -425,46 +419,49 @@ export default function EditPartScreen({
   );
 }
 
-const styles = StyleSheet.create({
-  flex: {
-    flex: 1,
-  },
-  container: {
-    flex: 1,
-    backgroundColor: colors.background,
-  },
-  content: {
-    padding: layout.spacingLg,
-    flexGrow: 1,
-  },
-  card: {
-    backgroundColor: colors.surface,
-    borderRadius: layout.radiusLg,
-    padding: layout.spacingLg,
-    borderWidth: 1,
-    borderColor: colors.border,
-    gap: layout.spacingSm,
-  },
-  title: {
-    fontSize: typography.title,
-    fontWeight: '700',
-    color: colors.heading,
-  },
-  subtitle: {
-    fontSize: typography.caption,
-    color: colors.textMuted,
-  },
-  errorText: {
-    color: colors.danger,
-    fontSize: typography.caption,
-  },
-  statusText: {
-    fontSize: typography.caption,
-    color: colors.textMuted,
-  },
-  statusSuccess: {
-    color: colors.primary,
-  },
+function createStyles(theme: Theme) {
+  const { colors } = theme;
+  return StyleSheet.create({
+    flex: {
+      flex: 1,
+    },
+    container: {
+      flex: 1,
+      backgroundColor: colors.background,
+    },
+    content: {
+      padding: layout.spacingLg,
+      paddingBottom: layout.spacingXl * 2,
+      flexGrow: 1,
+    },
+    card: {
+      backgroundColor: colors.surface,
+      borderRadius: layout.radiusLg,
+      padding: layout.spacingLg,
+      borderWidth: 1,
+      borderColor: colors.border,
+      gap: layout.spacingSm,
+    },
+    title: {
+      fontSize: typography.title,
+      fontWeight: '700',
+      color: colors.text,
+    },
+    subtitle: {
+      fontSize: typography.caption,
+      color: colors.textSecondary,
+    },
+    errorText: {
+      color: colors.danger,
+      fontSize: typography.caption,
+    },
+    statusText: {
+      fontSize: typography.caption,
+      color: colors.textSecondary,
+    },
+    statusSuccess: {
+      color: colors.accent,
+    },
   multilineInput: {
     minHeight: 90,
     textAlignVertical: 'top',
@@ -525,3 +522,13 @@ const styles = StyleSheet.create({
     fontWeight: '700',
   },
 });
+}
+
+
+
+
+
+
+
+
+

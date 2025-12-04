@@ -10,9 +10,9 @@ import {
 import { Input } from '../components/Input';
 import { Button } from '../components/Button';
 import { getDb } from '../db/database';
-import { colors } from '../theme/colors';
 import { layout } from '../theme/layout';
 import { typography } from '../theme/typography';
+import { useTheme, type Theme } from '../theme/ThemeProvider';
 
 type CreateMocScreenProps = {
   onCreated?: (itemId: number) => void;
@@ -26,6 +26,8 @@ export default function CreateMocScreen({ onCreated }: CreateMocScreenProps) {
   const [containers, setContainers] = useState<ContainerRow[]>([]);
   const [selectedContainerId, setSelectedContainerId] = useState<number | null>(null);
   const [saving, setSaving] = useState(false);
+  const theme = useTheme();
+  const styles = useMemo(() => createStyles(theme), [theme]);
 
   useEffect(() => {
     let isMounted = true;
@@ -123,15 +125,6 @@ export default function CreateMocScreen({ onCreated }: CreateMocScreenProps) {
           onChangeText={setName}
           placeholder="My Custom Falcon"
         />
-        <Input
-          label="Description / notes"
-          value={description}
-          onChangeText={setDescription}
-          placeholder="Optional details"
-          multiline
-          numberOfLines={3}
-          style={styles.multiline}
-        />
 
         <View style={styles.selector}>
           <Text style={styles.selectorLabel}>Container</Text>
@@ -169,66 +162,71 @@ export default function CreateMocScreen({ onCreated }: CreateMocScreenProps) {
   );
 }
 
-const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: colors.background,
-  },
-  content: {
-    padding: layout.spacingLg,
-  },
-  card: {
-    backgroundColor: colors.surface,
-    borderRadius: layout.radiusLg,
-    padding: layout.spacingLg,
-    borderWidth: 1,
-    borderColor: colors.border,
-    gap: layout.spacingSm,
-  },
-  title: {
-    fontSize: typography.title,
-    fontWeight: '700',
-    color: colors.heading,
-  },
-  subtitle: {
-    fontSize: typography.body,
-    color: colors.text,
-    lineHeight: typography.body + 4,
-  },
-  selector: {
-    borderWidth: 1,
-    borderColor: colors.border,
-    borderRadius: layout.radiusMd,
-    paddingHorizontal: layout.spacingMd,
-    paddingVertical: layout.spacingSm,
-    backgroundColor: colors.surface,
-    gap: layout.spacingSm,
-  },
-  selectorLabel: {
-    fontSize: typography.caption,
-    color: colors.textMuted,
-  },
-  optionList: {
-    gap: layout.spacingXs,
-  },
-  optionRow: {
-    paddingVertical: layout.spacingSm,
-    paddingHorizontal: layout.spacingSm,
-    borderRadius: layout.radiusSm,
-  },
-  optionRowActive: {
-    backgroundColor: colors.primarySoft,
-  },
-  optionText: {
-    fontSize: typography.body,
-    color: colors.text,
-  },
-  optionTextActive: {
-    color: colors.heading,
-    fontWeight: '700',
-  },
-  multiline: {
-    minHeight: 90,
-    textAlignVertical: 'top',
-  },
-});
+function createStyles(theme: Theme) {
+  const { colors } = theme;
+  return StyleSheet.create({
+    container: {
+      flex: 1,
+      backgroundColor: colors.background,
+    },
+    content: {
+      padding: layout.spacingLg,
+      paddingBottom: layout.spacingXl * 2,
+    },
+    card: {
+      backgroundColor: colors.surface,
+      borderRadius: layout.radiusLg,
+      padding: layout.spacingLg,
+      borderWidth: 1,
+      borderColor: colors.border,
+      gap: layout.spacingSm,
+    },
+    title: {
+      fontSize: typography.title,
+      fontWeight: '700',
+      color: colors.text,
+    },
+    subtitle: {
+      fontSize: typography.body,
+      color: colors.textSecondary,
+      lineHeight: typography.body + 4,
+    },
+    selector: {
+      borderWidth: 1,
+      borderColor: colors.border,
+      borderRadius: layout.radiusMd,
+      paddingHorizontal: layout.spacingMd,
+      paddingVertical: layout.spacingSm,
+      backgroundColor: colors.surface,
+      gap: layout.spacingSm,
+    },
+    selectorLabel: {
+      fontSize: typography.caption,
+      color: colors.textSecondary,
+    },
+    optionList: {
+      gap: layout.spacingXs,
+    },
+    optionRow: {
+      paddingVertical: layout.spacingSm,
+      paddingHorizontal: layout.spacingSm,
+      borderRadius: layout.radiusSm,
+    },
+    optionRowActive: {
+      backgroundColor: colors.surfaceAlt ?? colors.surface,
+    },
+    optionText: {
+      fontSize: typography.body,
+      color: colors.text,
+    },
+    optionTextActive: {
+      color: colors.text,
+      fontWeight: '700',
+    },
+    actionsRow: {
+      flexDirection: 'row',
+      gap: layout.spacingSm,
+      marginTop: layout.spacingSm,
+    },
+  });
+}

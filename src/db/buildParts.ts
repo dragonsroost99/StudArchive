@@ -20,6 +20,7 @@ export async function ensureBuildPartsTable(): Promise<void> {
       component_condition  TEXT,
       quantity             INTEGER NOT NULL DEFAULT 1,
       is_spare             INTEGER NOT NULL DEFAULT 0,
+      image_uri            TEXT,
       FOREIGN KEY(parent_item_id) REFERENCES items(id) ON DELETE CASCADE
     );
   `);
@@ -27,7 +28,11 @@ export async function ensureBuildPartsTable(): Promise<void> {
   // Add missing columns for older installs
   const columns = await db.getAllAsync<{ name: string }>(`PRAGMA table_info(build_parts);`);
   const hasDescription = columns.some(col => col.name === 'component_description');
+  const hasImageUri = columns.some(col => col.name === 'image_uri');
   if (!hasDescription) {
     await db.execAsync(`ALTER TABLE build_parts ADD COLUMN component_description TEXT;`);
+  }
+  if (!hasImageUri) {
+    await db.execAsync(`ALTER TABLE build_parts ADD COLUMN image_uri TEXT;`);
   }
 }

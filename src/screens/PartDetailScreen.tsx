@@ -1,9 +1,8 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { ScrollView, View, Text, StyleSheet, Modal, TouchableOpacity, Alert, Image } from 'react-native';
 import { Button } from '../components/Button';
 import { Input } from '../components/Input';
 import { getDb } from '../db/database';
-import { colors } from '../theme/colors';
 import { layout } from '../theme/layout';
 import { typography } from '../theme/typography';
 import {
@@ -11,6 +10,13 @@ import {
   fetchSetMetadataFromRebrickable,
   type BuildPart,
 } from '../services/inventoryImport/rebrickable';
+import { listLooseParts, type LoosePartRow } from '../db/items';
+import { useTheme, type Theme } from '../theme/ThemeProvider';
+import {
+  fetchAndCacheThumbnail,
+  getThumbnail,
+  normalizeColorId,
+} from '../services/thumbnailStore';
 
 export type PartDetailParams = {
   partId: string;
@@ -25,6 +31,10 @@ type PartDetailScreenProps = {
   onEditPress?: (params: PartDetailParams) => void;
   refreshKey?: number;
   onNavigateToDetail?: (params: PartDetailParams) => void;
+  onNavigateToBuildComponent?: (params: {
+    buildPartId: number;
+    parentItemId: number;
+  }) => void;
 };
 
 type PartRecord = {
@@ -65,6 +75,7 @@ export default function PartDetailScreen({
   refreshKey = 0,
   onTitleChange,
   onNavigateToDetail,
+  onNavigateToBuildComponent,
 }: PartDetailScreenProps) {
   const resolvedParams = route?.params ?? params;
   const partId = resolvedParams?.partId;
@@ -85,13 +96,16 @@ export default function PartDetailScreen({
     quantity: number;
   } | null>(null);
   const [selectedItem, setSelectedItem] = useState<PartRecord | null>(null);
-  const [containers, setContainers] = useState<{ id: number; name: string }[]>([]);
+  const [containers, setContainers] = useState<
+    { id: number; name: string; roomName?: string | null }[]
+  >([]);
   const [moveModalVisible, setMoveModalVisible] = useState(false);
   const [destinationContainerId, setDestinationContainerId] = useState<number | null>(null);
   const [moveQty, setMoveQty] = useState('');
   const [moveError, setMoveError] = useState<string | null>(null);
   const [savingMove, setSavingMove] = useState(false);
   const [buildParts, setBuildParts] = useState<BuildPartRow[]>([]);
+  const [looseOwnedMap, setLooseOwnedMap] = useState<Map<string, number>>(new Map());
   const [inventoryFilter, setInventoryFilter] = useState<'all' | 'part' | 'minifigure'>('all');
   const [inventoryModalVisible, setInventoryModalVisible] = useState(false);
   const [editingBuildPart, setEditingBuildPart] = useState<BuildPartRow | null>(null);
@@ -103,6 +117,13 @@ export default function PartDetailScreen({
   const [importModalVisible, setImportModalVisible] = useState(false);
   const [importSetNumber, setImportSetNumber] = useState('');
   const [importLoading, setImportLoading] = useState(false);
+  const [resolvedImageUri, setResolvedImageUri] = useState<string | null>(null);
+  const [inventoryThumbnailCache, setInventoryThumbnailCache] = useState<Record<string, string>>(
+    {}
+  );
+  const inventoryThumbRequests = useRef<Set<string>>(new Set());
+  const theme = useTheme();
+  const styles = useMemo(() => createStyles(theme), [theme]);
 
 async function loadPartById(id: string): Promise<PartRecord | null> {
     const db = await getDb();
@@ -175,10 +196,14 @@ async function loadPartById(id: string): Promise<PartRecord | null> {
     (async () => {
       try {
         const db = await getDb();
-        const rows = await db.getAllAsync<{ id: number; name: string }>(`
-          SELECT id, name
-          FROM containers
-          ORDER BY name ASC;
+        const rows = await db.getAllAsync<{ id: number; name: string; roomName: string | null }>(`
+          SELECT
+            c.id,
+            c.name,
+            r.name AS roomName
+          FROM containers c
+          LEFT JOIN rooms r ON r.id = c.room_id
+          ORDER BY c.name ASC;
         `);
         if (isMounted) {
           setContainers(rows);
@@ -320,6 +345,15 @@ async function loadPartById(id: string): Promise<PartRecord | null> {
     });
   }
 
+  const buildLooseKey = (number?: string | null, color?: string | null) =>
+    `${(number ?? '').trim().toLowerCase()}||${(color ?? '').trim().toLowerCase()}`;
+  const buildInventoryThumbKey = (number?: string | null, color?: string | null) => {
+    const numKey = (number ?? '').trim();
+    if (!numKey) return '';
+    const colorKey = normalizeColorId(color);
+    return `${numKey}|${colorKey}`;
+  };
+
   async function loadBuildParts(record: PartRecord, isMountedFlag: boolean) {
     const db = await getDb();
     const rows = await db.getAllAsync<BuildPartRow>(
@@ -333,6 +367,7 @@ async function loadPartById(id: string): Promise<PartRecord | null> {
           component_category AS componentCategory,
           component_description AS componentDescription,
           component_condition AS componentCondition,
+          image_uri AS imageUri,
           quantity,
           is_spare AS isSpare
         FROM build_parts
@@ -342,7 +377,17 @@ async function loadPartById(id: string): Promise<PartRecord | null> {
       [record.id]
     );
 
+    // Build loose inventory lookup keyed by designId + color
+    const looseParts = await listLooseParts();
+    const looseMap = new Map<string, number>();
+    looseParts.forEach(p => {
+      const key = buildLooseKey(p.number, p.color);
+      const prev = looseMap.get(key) ?? 0;
+      looseMap.set(key, prev + (p.qty ?? 0));
+    });
+
     if (!isMountedFlag) return;
+    setLooseOwnedMap(looseMap);
     setBuildParts(rows);
   }
 
@@ -581,7 +626,8 @@ async function loadPartById(id: string): Promise<PartRecord | null> {
   const containerLabel = useMemo(() => {
     if (destinationContainerId == null) return 'No container';
     const match = containers.find(c => c.id === destinationContainerId);
-    return match ? match.name : 'No container';
+    if (!match) return 'No container';
+    return match.roomName ? `${match.roomName} - ${match.name}` : match.name;
   }, [containers, destinationContainerId]);
 
   const isSetOrMoc = useMemo(() => isSetOrMocType(part?.type), [part?.type]);
@@ -596,6 +642,77 @@ async function loadPartById(id: string): Promise<PartRecord | null> {
     if (t === 'moc') return 'MOC Inventory';
     return 'Build Inventory';
   }, [isSetOrMoc, part?.type]);
+
+  useEffect(() => {
+    if (!isSetOrMoc || buildParts.length === 0) return;
+    const targets: Array<{
+      key: string;
+      num: string;
+      color?: string | null;
+    }> = [];
+    buildParts.forEach(row => {
+      const designId = (row.componentNumber ?? '').trim();
+      if (!designId) return;
+      const hasImageInRow =
+        (row.imageUri && row.imageUri.length > 0) ||
+        (row.componentDescription && row.componentDescription.startsWith('http'));
+      if (hasImageInRow) return;
+      const cacheKey = buildInventoryThumbKey(designId, row.componentColor);
+      if (cacheKey && Object.prototype.hasOwnProperty.call(inventoryThumbnailCache, cacheKey)) {
+        return;
+      }
+      targets.push({
+        key: cacheKey || designId,
+        num: designId,
+        color: row.componentColor,
+      });
+    });
+    if (targets.length === 0) return;
+    let cancelled = false;
+    (async () => {
+      for (const entry of targets) {
+        if (cancelled) break;
+        try {
+          if (inventoryThumbRequests.current.has(entry.key)) {
+            continue;
+          }
+          const cached = await getThumbnail(entry.num, entry.color);
+          if (cancelled) break;
+          if (cached !== null) {
+            setInventoryThumbnailCache(prev => {
+              if (Object.prototype.hasOwnProperty.call(prev, entry.key)) {
+                return prev;
+              }
+              return { ...prev, [entry.key]: cached };
+            });
+            continue;
+          }
+          inventoryThumbRequests.current.add(entry.key);
+          fetchAndCacheThumbnail(entry.num, entry.color)
+            .then(url => {
+              if (cancelled) return;
+              setInventoryThumbnailCache(prev => {
+                if (Object.prototype.hasOwnProperty.call(prev, entry.key)) {
+                  return prev;
+                }
+                return { ...prev, [entry.key]: url };
+              });
+            })
+            .catch(error => {
+              console.warn('[PartDetail] Failed to fetch inventory thumbnail', entry.num, error);
+            })
+            .finally(() => {
+              inventoryThumbRequests.current.delete(entry.key);
+            });
+        } catch (error) {
+          console.warn('[PartDetail] Failed to fetch inventory thumbnail', entry.num, error);
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [buildParts, isSetOrMoc, inventoryThumbnailCache]);
 
   function getActionSource(): PartRecord | null {
     if (selectedItem) return selectedItem;
@@ -788,23 +905,55 @@ async function loadPartById(id: string): Promise<PartRecord | null> {
   const category =
     part?.category_name ??
     'Category not set';
-  const description =
-    part?.description ??
-    part?.desc ??
-    'No description provided yet.';
-  const imageUri = useMemo(() => {
-    const uri = part?.image_uri ?? null;
-    if (uri && typeof uri === 'string') {
-      const trimmed = uri.trim();
-      return trimmed.length > 0 ? trimmed : null;
-    }
-    return null;
-  }, [part?.image_uri]);
-
   useEffect(() => {
     const nextTitle = title || 'Details';
     onTitleChange?.(nextTitle);
   }, [title, onTitleChange]);
+
+  const parentItemId = useMemo(() => {
+    if (typeof part?.id === 'number') return part.id;
+    if (typeof part?.id === 'string') {
+      const parsed = Number(part.id);
+      return Number.isNaN(parsed) ? null : parsed;
+    }
+    return null;
+  }, [part?.id]);
+
+  useEffect(() => {
+    const uri = part?.image_uri ?? null;
+    const baseUri =
+      uri && typeof uri === 'string' && uri.trim().length > 0 ? uri.trim() : null;
+    setResolvedImageUri(baseUri);
+
+    let cancelled = false;
+    (async () => {
+      if (baseUri) return;
+      const typeKey = (part?.type ?? '').toLowerCase();
+      if (typeKey === 'set' || typeKey === 'moc') return;
+      const designId = (part?.number ?? '').trim();
+      if (!designId) return;
+      const colorValue = part?.color ?? part?.color_name ?? null;
+      try {
+        const cached = await getThumbnail(designId, colorValue);
+        if (cancelled) return;
+        if (cached !== null) {
+          if (cached) {
+            setResolvedImageUri(cached);
+          }
+          return;
+        }
+        const fetched = await fetchAndCacheThumbnail(designId, colorValue);
+        if (!cancelled && fetched) {
+          setResolvedImageUri(fetched);
+        }
+      } catch (error) {
+        console.warn('[PartDetail] Failed to resolve thumbnail', designId, error);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [part?.image_uri, part?.number, part?.type, part?.color, part?.color_name, refreshKey]);
 
   const totalQuantityDisplay = useMemo(() => {
     if (totalQuantity && totalQuantity > 0) return totalQuantity.toString();
@@ -820,9 +969,20 @@ async function loadPartById(id: string): Promise<PartRecord | null> {
         keyboardShouldPersistTaps="handled"
       >
         <View style={styles.card}>
-          {imageUri ? (
-            <View style={styles.imageWrapper}>
-              <Image source={{ uri: imageUri }} style={styles.detailImage} />
+          {resolvedImageUri ? (
+            <View
+              style={[
+                styles.imageWrapper,
+                isSetOrMocDetails && styles.imageWrapperSet,
+              ]}
+            >
+              <Image
+                source={{ uri: resolvedImageUri }}
+                style={[
+                  styles.detailImage,
+                  isSetOrMocDetails && styles.detailImageContain,
+                ]}
+              />
             </View>
           ) : null}
           <View style={styles.headerRow}>
@@ -868,10 +1028,6 @@ async function loadPartById(id: string): Promise<PartRecord | null> {
             <View style={styles.detailRow}>
               <Text style={styles.detailLabel}>{isSetOrMocDetails ? 'Theme' : 'Category'}</Text>
               <Text style={styles.detailValue}>{category}</Text>
-            </View>
-            <View style={styles.detailRow}>
-              <Text style={styles.detailLabel}>Description</Text>
-              <Text style={styles.detailValue}>{description}</Text>
             </View>
           </View>
 
@@ -992,11 +1148,21 @@ async function loadPartById(id: string): Promise<PartRecord | null> {
                       return true;
                     })
                     .map(row => {
-                    const subtype = (row.componentSubtype ?? '').toLowerCase();
                     const imageUriFromComponent =
-                      row.componentDescription && row.componentDescription.startsWith('http')
+                      row.imageUri && row.imageUri.length > 0
+                        ? row.imageUri
+                        : row.componentDescription && row.componentDescription.startsWith('http')
                         ? row.componentDescription
                         : null;
+                    const thumbCacheKey = buildInventoryThumbKey(
+                      row.componentNumber,
+                      row.componentColor
+                    );
+                    const cachedThumb =
+                      (thumbCacheKey && inventoryThumbnailCache[thumbCacheKey]) || '';
+                    const thumbnailUri =
+                      imageUriFromComponent ||
+                      (cachedThumb && cachedThumb.length > 0 ? cachedThumb : null);
                     const metaParts: string[] = [];
                     if (row.componentColor) metaParts.push(row.componentColor);
                     if (row.componentSubtype) metaParts.push(row.componentSubtype);
@@ -1004,42 +1170,24 @@ async function loadPartById(id: string): Promise<PartRecord | null> {
                     const meta = metaParts.join(' | ');
                     const qtyValue = row.quantity ?? 0;
                     const isSpare = !!row.isSpare;
+                    const ownedLoose =
+                      looseOwnedMap.get(buildLooseKey(row.componentNumber, row.componentColor)) ?? 0;
+                    const missingQty = Math.max(0, qtyValue - ownedLoose);
                     return (
                       <TouchableOpacity
                         key={row.id}
                         style={styles.inventoryRow}
                         onPress={async () => {
-                          if (!row.componentNumber && !row.componentName) return;
-                          try {
-                            const db = await getDb();
-                            const matches = await db.getAllAsync<{ id: number }>(
-                              `
-                                SELECT id
-                                FROM items
-                                WHERE (number = ? AND number IS NOT NULL)
-                                   OR (name = ? AND name IS NOT NULL)
-                                ORDER BY id ASC
-                                LIMIT 1;
-                              `,
-                              [row.componentNumber ?? null, row.componentName ?? null]
-                            );
-                            const targetId = matches[0]?.id;
-                            if (targetId) {
-                              onNavigateToDetail?.({
-                                partId: String(targetId),
-                                partName: row.componentName ?? undefined,
-                                colorName: row.componentColor ?? undefined,
-                                quantity: row.quantity ?? undefined,
-                              });
-                            }
-                          } catch (error) {
-                            console.error('Failed to open component detail', error);
-                          }
+                          if (!row.id || parentItemId == null) return;
+                          onNavigateToBuildComponent?.({
+                            buildPartId: row.id,
+                            parentItemId,
+                          });
                         }}
                       >
-                        {imageUriFromComponent ? (
+                        {thumbnailUri ? (
                           <Image
-                            source={{ uri: imageUriFromComponent }}
+                            source={{ uri: thumbnailUri }}
                             style={styles.inventoryThumb}
                           />
                         ) : null}
@@ -1048,6 +1196,11 @@ async function loadPartById(id: string): Promise<PartRecord | null> {
                             {row.componentName ?? 'Unnamed component'}
                           </Text>
                           {meta ? <Text style={styles.inventoryMeta}>{meta}</Text> : null}
+                          {isSetOrMoc ? (
+                            <Text style={styles.inventoryMeta}>
+                              Required: {qtyValue} · Owned: {ownedLoose} · Missing: {missingQty}
+                            </Text>
+                          ) : null}
                         </View>
                         {isSpare ? (
                           <View style={styles.inventorySpareBadge}>
@@ -1107,6 +1260,9 @@ async function loadPartById(id: string): Promise<PartRecord | null> {
               </TouchableOpacity>
               {containers.map(option => {
                 const isActive = option.id === destinationContainerId;
+                const label = option.roomName
+                  ? `${option.roomName} - ${option.name}`
+                  : option.name;
                 return (
                   <TouchableOpacity
                     key={option.id}
@@ -1119,7 +1275,7 @@ async function loadPartById(id: string): Promise<PartRecord | null> {
                         isActive && styles.optionTextActive,
                       ]}
                     >
-                      {option.name}
+                      {label}
                     </Text>
                   </TouchableOpacity>
                 );
@@ -1256,14 +1412,17 @@ async function loadPartById(id: string): Promise<PartRecord | null> {
   );
 }
 
-const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: colors.background,
-  },
-  content: {
-    padding: layout.spacingLg,
-  },
+function createStyles(theme: Theme) {
+  const { colors } = theme;
+  return StyleSheet.create({
+    container: {
+      flex: 1,
+      backgroundColor: colors.background,
+    },
+    content: {
+      padding: layout.spacingLg,
+      paddingBottom: layout.spacingXl * 2,
+    },
   card: {
     backgroundColor: colors.surface,
     borderRadius: layout.radiusLg,
@@ -1281,10 +1440,17 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: colors.border,
   },
+  imageWrapperSet: {
+    height: undefined,
+    aspectRatio: 1.6,
+  },
   detailImage: {
     width: '100%',
     height: '100%',
     resizeMode: 'cover',
+  },
+  detailImageContain: {
+    resizeMode: 'contain',
   },
   inventoryThumb: {
     width: 64,
@@ -1598,4 +1764,7 @@ const styles = StyleSheet.create({
     fontSize: typography.body,
     color: colors.text,
   },
-});
+  });
+}
+
+

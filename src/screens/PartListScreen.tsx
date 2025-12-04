@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   FlatList,
   Image,
@@ -11,9 +11,14 @@ import {
 import { Input } from '../components/Input';
 import { Button } from '../components/Button';
 import { getDb } from '../db/database';
-import { colors } from '../theme/colors';
 import { layout } from '../theme/layout';
 import { typography } from '../theme/typography';
+import { useTheme, type Theme } from '../theme/ThemeProvider';
+import {
+  fetchAndCacheThumbnail,
+  getThumbnail,
+  normalizeColorId,
+} from '../services/thumbnailStore';
 
 export type ItemRow = {
   id: number;
@@ -60,6 +65,16 @@ export default function PartListScreen({
   const [containers, setContainers] = useState<
     { id: number; name: string; roomName?: string | null }[]
   >([]);
+  const [thumbnailCache, setThumbnailCache] = useState<Record<string, string>>({});
+  const thumbnailRequests = useRef<Set<string>>(new Set());
+  const theme = useTheme();
+  const styles = useMemo(() => createStyles(theme), [theme]);
+  const buildThumbnailKey = (num?: string | null, color?: string | null) => {
+    const trimmedNum = (num ?? '').trim();
+    if (!trimmedNum) return '';
+    const colorId = normalizeColorId(color);
+    return `${trimmedNum}|${colorId}`;
+  };
 
   async function loadItems(): Promise<ItemRow[]> {
     const db = await getDb();
@@ -101,6 +116,58 @@ export default function PartListScreen({
       isMounted = false;
     };
   }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      for (const item of filteredItems) {
+        if (cancelled) break;
+        const num = (item.number ?? '').trim();
+        if (!num) continue;
+        const typeKey = (item.type ?? '').toLowerCase();
+        if (typeKey === 'set' || typeKey === 'moc') continue;
+        const cacheKey = buildThumbnailKey(num, item.color);
+        if (!cacheKey) continue;
+        if (Object.prototype.hasOwnProperty.call(thumbnailCache, cacheKey)) {
+          continue;
+        }
+        if (thumbnailRequests.current.has(cacheKey)) continue;
+        if (item.imageUri && item.imageUri.trim().length > 0) continue;
+
+        try {
+          const cached = await getThumbnail(num, item.color);
+          if (cancelled) break;
+          if (cached !== null) {
+            setThumbnailCache(prev => {
+              if (Object.prototype.hasOwnProperty.call(prev, cacheKey)) return prev;
+              return { ...prev, [cacheKey]: cached };
+            });
+            continue;
+          }
+          thumbnailRequests.current.add(cacheKey);
+          fetchAndCacheThumbnail(num, item.color)
+            .then(url => {
+              if (cancelled) return;
+              setThumbnailCache(prev => {
+                if (Object.prototype.hasOwnProperty.call(prev, cacheKey)) return prev;
+                return { ...prev, [cacheKey]: url };
+              });
+            })
+            .catch(error => {
+              console.warn('[PartList] Failed to fetch thumbnail', num, error);
+            })
+            .finally(() => {
+              thumbnailRequests.current.delete(cacheKey);
+            });
+        } catch (error) {
+          console.warn('[PartList] Thumbnail lookup failed', num, error);
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [filteredItems, thumbnailCache]);
 
   useEffect(() => {
     let isMounted = true;
@@ -230,6 +297,20 @@ export default function PartListScreen({
       if (existing) {
         existing.totalQuantity += qtyValue;
         existing.containerIds.add(containerId);
+        const rep = existing.representative;
+        // Prefer the item that actually has an image/number/color as the representative
+        const shouldSwapRepresentative =
+          (!!item.imageUri && !rep.imageUri) || (!!item.number && !rep.number);
+        if (shouldSwapRepresentative) {
+          existing.representative = item;
+        } else {
+          if (!rep.imageUri && item.imageUri) rep.imageUri = item.imageUri;
+          if (!rep.number && item.number) rep.number = item.number;
+          if (!rep.color && item.color) rep.color = item.color;
+          if (!rep.categoryName && item.categoryName) {
+            rep.categoryName = item.categoryName;
+          }
+        }
       } else {
         map.set(key, {
           representative: item,
@@ -253,8 +334,16 @@ export default function PartListScreen({
     const subtitleText = categoryLabel
       ? `${colorLabel} · ${categoryLabel}`
       : colorLabel;
-    const thumbnailUri = representative.imageUri;
+    const directImage = representative.imageUri?.trim();
+    const effectiveNumber = (representative.number ?? '').trim();
+    const cacheKey = buildThumbnailKey(effectiveNumber, representative.color);
+    const cachedThumb = cacheKey ? thumbnailCache[cacheKey] : '';
+    const thumbnailUri =
+      (directImage && directImage.length > 0 ? directImage : null) ||
+      (cachedThumb && cachedThumb.length > 0 ? cachedThumb : null) ||
+      null;
     const typeKey = (representative.type ?? '').toLowerCase();
+    const isSetOrMoc = typeKey === 'set' || typeKey === 'moc';
     const placeholderStyle =
       typeKey === 'set'
         ? styles.thumbPlaceholderSet
@@ -285,9 +374,20 @@ export default function PartListScreen({
         }}
       >
         <View style={styles.row}>
-          <View style={styles.thumbWrapper}>
+          <View
+            style={[
+              styles.thumbWrapper,
+              isSetOrMoc && styles.thumbWrapperWide,
+            ]}
+          >
             {thumbnailUri ? (
-              <Image source={{ uri: thumbnailUri }} style={styles.thumbImage} />
+              <Image
+                source={{ uri: thumbnailUri }}
+                style={[
+                  styles.thumbImage,
+                  isSetOrMoc && styles.thumbImageContain,
+                ]}
+              />
             ) : (
               <View style={[styles.thumbPlaceholder, placeholderStyle]}>
                 <Text style={styles.thumbPlaceholderText}>
@@ -314,6 +414,7 @@ export default function PartListScreen({
     <View style={styles.container}>
       <FlatList
         data={groupedItems}
+        extraData={thumbnailCache}
         keyExtractor={item => item.key}
         renderItem={renderItem}
         ItemSeparatorComponent={() => <View style={styles.separator} />}
@@ -406,7 +507,9 @@ export default function PartListScreen({
   );
 }
 
-const styles = StyleSheet.create({
+function createStyles(theme: Theme) {
+  const { colors } = theme;
+  return StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: colors.background,
@@ -517,7 +620,7 @@ const styles = StyleSheet.create({
     fontWeight: '700',
   },
   listContent: {
-    paddingBottom: layout.spacingLg,
+    paddingBottom: layout.spacingXl * 2,
   },
   card: {
     backgroundColor: colors.surface,
@@ -542,10 +645,18 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: colors.border,
   },
+  thumbWrapperWide: {
+    width: 96,
+    height: undefined,
+    aspectRatio: 1.6,
+  },
   thumbImage: {
     width: '100%',
     height: '100%',
     resizeMode: 'cover',
+  },
+  thumbImageContain: {
+    resizeMode: 'contain',
   },
   thumbPlaceholder: {
     width: '100%',
@@ -613,6 +724,10 @@ const styles = StyleSheet.create({
   separator: {
     height: layout.spacingSm,
   },
-});
+  });
+}
+
+
+
 
 

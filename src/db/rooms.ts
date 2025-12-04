@@ -1,5 +1,5 @@
 // src/db/rooms.ts
-import { getDb } from './database';
+import { getDb, resetDb } from './database';
 
 export type Room = {
   id: number;
@@ -17,12 +17,30 @@ export async function ensureRoomsTable(): Promise<void> {
 }
 
 export async function listRooms(): Promise<Room[]> {
-  const db = await getDb();
-  return db.getAllAsync<Room>(`
-    SELECT id, name
-    FROM rooms
-    ORDER BY name ASC;
-  `);
+  let attempt = 0;
+  while (attempt < 2) {
+    try {
+      const db = await getDb();
+      return await db.getAllAsync<Room>(`
+        SELECT id, name
+        FROM rooms
+        ORDER BY name ASC;
+      `);
+    } catch (error: any) {
+      attempt += 1;
+      const message = String(error?.message ?? error ?? '');
+      console.warn('[Rooms] listRooms failed', message);
+      const transient =
+        message.includes('shared object') ||
+        message.includes('prepareAsync') ||
+        message.includes('NativeDatabase');
+      if (attempt >= 2 || !transient) {
+        throw error;
+      }
+      resetDb();
+    }
+  }
+  return [];
 }
 
 export async function createRoom(name: string): Promise<void> {

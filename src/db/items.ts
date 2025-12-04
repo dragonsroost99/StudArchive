@@ -19,6 +19,12 @@ export type Item = {
   image_uri?: string | null;
 };
 
+export type LoosePartRow = {
+  number: string | null;
+  color: string | null;
+  qty: number | null;
+};
+
 export async function ensureItemsTable(): Promise<void> {
   const db = await getDb();
   await db.execAsync(`
@@ -209,4 +215,18 @@ export async function deleteItem(id: number): Promise<void> {
   `,
     [id]
   );
+}
+
+export async function listLooseParts(): Promise<LoosePartRow[]> {
+  const db = await getDb();
+  return db.getAllAsync<LoosePartRow>(`
+    SELECT
+      number,
+      color,
+      qty
+    FROM items
+    WHERE type = 'part'
+      AND number IS NOT NULL
+    ORDER BY number ASC;
+  `);
 }
