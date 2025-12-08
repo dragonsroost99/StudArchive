@@ -8,6 +8,10 @@ export type Item = {
   type: ItemType;
   name: string;
   number: string | null;
+  bricklink_id?: string | null;
+  brickowl_id?: string | null;
+  rebrickable_id?: string | null;
+  catalog_color_id?: number | null;
   container_id: number;
   qty: number;
   condition: string | null;   // e.g. "New", "Used", "Mixed"
@@ -33,6 +37,9 @@ export async function ensureItemsTable(): Promise<void> {
       type         TEXT NOT NULL,
       name         TEXT NOT NULL,
       number       TEXT,
+      bricklink_id TEXT,
+      brickowl_id  TEXT,
+      rebrickable_id TEXT,
       container_id INTEGER NOT NULL,
       qty          INTEGER NOT NULL DEFAULT 1,
       condition    TEXT,
@@ -50,6 +57,10 @@ export async function ensureItemsTable(): Promise<void> {
   const hasCategory = columns.some(col => col.name === 'category');
   const hasDescription = columns.some(col => col.name === 'description');
   const hasImageUri = columns.some(col => col.name === 'image_uri');
+  const hasBricklinkId = columns.some(col => col.name === 'bricklink_id');
+  const hasBrickowlId = columns.some(col => col.name === 'brickowl_id');
+  const hasRebrickableId = columns.some(col => col.name === 'rebrickable_id');
+  const hasCatalogColorId = columns.some(col => col.name === 'catalog_color_id');
 
   if (!hasCategory) {
     await db.execAsync(`ALTER TABLE items ADD COLUMN category TEXT;`);
@@ -59,6 +70,18 @@ export async function ensureItemsTable(): Promise<void> {
   }
   if (!hasImageUri) {
     await db.execAsync(`ALTER TABLE items ADD COLUMN image_uri TEXT;`);
+  }
+  if (!hasBricklinkId) {
+    await db.execAsync(`ALTER TABLE items ADD COLUMN bricklink_id TEXT;`);
+  }
+  if (!hasBrickowlId) {
+    await db.execAsync(`ALTER TABLE items ADD COLUMN brickowl_id TEXT;`);
+  }
+  if (!hasRebrickableId) {
+    await db.execAsync(`ALTER TABLE items ADD COLUMN rebrickable_id TEXT;`);
+  }
+  if (!hasCatalogColorId) {
+    await db.execAsync(`ALTER TABLE items ADD COLUMN catalog_color_id INTEGER;`);
   }
 }
 
@@ -73,6 +96,9 @@ export async function listItemsForContainer(
       type,
       name,
       number,
+      bricklink_id,
+      brickowl_id,
+      rebrickable_id,
       container_id,
       qty,
       condition,
@@ -95,6 +121,9 @@ export async function createItem(params: {
   type: ItemType;
   name: string;
   number?: string;
+  bricklinkId?: string | null;
+  brickowlId?: string | null;
+  rebrickableId?: string | null;
   qty?: number;
   condition?: string;
   color?: string;
@@ -120,14 +149,17 @@ export async function createItem(params: {
   await db.runAsync(
     `
     INSERT INTO items
-      (type, name, number, container_id, qty, condition, color, category, description, value_each, value_total, image_uri)
+      (type, name, number, bricklink_id, brickowl_id, rebrickable_id, container_id, qty, condition, color, category, description, value_each, value_total, image_uri)
     VALUES
-      (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+      (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
   `,
     [
       params.type,
       name,
       params.number ?? null,
+      params.bricklinkId ?? null,
+      params.brickowlId ?? null,
+      params.rebrickableId ?? null,
       params.containerId,
       qty,
       params.condition ?? null,
@@ -147,6 +179,9 @@ export async function updateItem(params: {
   type: ItemType;
   name: string;
   number?: string;
+  bricklinkId?: string | null;
+  brickowlId?: string | null;
+  rebrickableId?: string | null;
   qty?: number;
   condition?: string;
   color?: string;
@@ -176,6 +211,9 @@ export async function updateItem(params: {
       type = ?,
       name = ?,
       number = ?,
+      bricklink_id = ?,
+      brickowl_id = ?,
+      rebrickable_id = ?,
       container_id = ?,
       qty = ?,
       condition = ?,
@@ -191,6 +229,9 @@ export async function updateItem(params: {
       params.type,
       name,
       params.number ?? null,
+      params.bricklinkId ?? null,
+      params.brickowlId ?? null,
+      params.rebrickableId ?? null,
       params.containerId,
       qty,
       params.condition ?? null,

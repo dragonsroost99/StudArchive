@@ -1,62 +1,25 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import {
-  Alert,
-  ScrollView,
-  StyleSheet,
-  Text,
-  TouchableOpacity,
-  View,
-} from 'react-native';
+import { Alert, ScrollView, StyleSheet, View } from 'react-native';
 import { Input } from '../components/Input';
 import { Button } from '../components/Button';
 import { getDb } from '../db/database';
 import { layout } from '../theme/layout';
 import { typography } from '../theme/typography';
 import { useTheme, type Theme } from '../theme/ThemeProvider';
+import { ThemedText as Text } from '../components/ThemedText';
+import { ContainerPicker } from '../components/ContainerPicker';
 
 type CreateMocScreenProps = {
   onCreated?: (itemId: number) => void;
 };
 
-type ContainerRow = { id: number; name: string };
-
 export default function CreateMocScreen({ onCreated }: CreateMocScreenProps) {
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
-  const [containers, setContainers] = useState<ContainerRow[]>([]);
   const [selectedContainerId, setSelectedContainerId] = useState<number | null>(null);
   const [saving, setSaving] = useState(false);
   const theme = useTheme();
   const styles = useMemo(() => createStyles(theme), [theme]);
-
-  useEffect(() => {
-    let isMounted = true;
-    (async () => {
-      try {
-        const db = await getDb();
-        const rows = await db.getAllAsync<ContainerRow>(
-          `
-            SELECT id, name
-            FROM containers
-            ORDER BY name ASC;
-          `
-        );
-        if (isMounted) {
-          setContainers(rows);
-        }
-      } catch (error) {
-        console.error('Failed to load containers', error);
-      }
-    })();
-    return () => {
-      isMounted = false;
-    };
-  }, []);
-
-  const containerOptions = useMemo(
-    () => [{ id: -1, name: 'No container' }, ...containers],
-    [containers]
-  );
 
   async function handleSave() {
     const trimmedName = name.trim();
@@ -78,7 +41,7 @@ export default function CreateMocScreen({ onCreated }: CreateMocScreenProps) {
           'moc',
           trimmedName,
           null,
-          selectedContainerId === -1 ? null : selectedContainerId,
+          selectedContainerId,
           1,
           null,
           null,
@@ -126,31 +89,12 @@ export default function CreateMocScreen({ onCreated }: CreateMocScreenProps) {
           placeholder="My Custom Falcon"
         />
 
-        <View style={styles.selector}>
-          <Text style={styles.selectorLabel}>Container</Text>
-          <View style={styles.optionList}>
-            {containerOptions.map(option => {
-              const isActive =
-                option.id === selectedContainerId ||
-                (option.id === -1 && selectedContainerId === null);
-              return (
-                <TouchableOpacity
-                  key={option.id}
-                  style={[styles.optionRow, isActive && styles.optionRowActive]}
-                  onPress={() =>
-                    setSelectedContainerId(option.id === -1 ? null : option.id)
-                  }
-                >
-                  <Text
-                    style={[styles.optionText, isActive && styles.optionTextActive]}
-                  >
-                    {option.name}
-                  </Text>
-                </TouchableOpacity>
-              );
-            })}
-          </View>
-        </View>
+        <ContainerPicker
+          label="Container"
+          selectedContainerId={selectedContainerId}
+          onChange={setSelectedContainerId}
+          allowCreateNew
+        />
 
         <Button
           label={saving ? 'Saving...' : 'Save MOC'}
@@ -190,38 +134,6 @@ function createStyles(theme: Theme) {
       fontSize: typography.body,
       color: colors.textSecondary,
       lineHeight: typography.body + 4,
-    },
-    selector: {
-      borderWidth: 1,
-      borderColor: colors.border,
-      borderRadius: layout.radiusMd,
-      paddingHorizontal: layout.spacingMd,
-      paddingVertical: layout.spacingSm,
-      backgroundColor: colors.surface,
-      gap: layout.spacingSm,
-    },
-    selectorLabel: {
-      fontSize: typography.caption,
-      color: colors.textSecondary,
-    },
-    optionList: {
-      gap: layout.spacingXs,
-    },
-    optionRow: {
-      paddingVertical: layout.spacingSm,
-      paddingHorizontal: layout.spacingSm,
-      borderRadius: layout.radiusSm,
-    },
-    optionRowActive: {
-      backgroundColor: colors.surfaceAlt ?? colors.surface,
-    },
-    optionText: {
-      fontSize: typography.body,
-      color: colors.text,
-    },
-    optionTextActive: {
-      color: colors.text,
-      fontWeight: '700',
     },
     actionsRow: {
       flexDirection: 'row',

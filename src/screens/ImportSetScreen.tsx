@@ -1,12 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import {
-  Modal,
-  ScrollView,
-  StyleSheet,
-  Text,
-  TouchableOpacity,
-  View,
-} from 'react-native';
+import { Modal, ScrollView, StyleSheet, View } from 'react-native';
 import { Input } from '../components/Input';
 import { Button } from '../components/Button';
 import { getDb } from '../db/database';
@@ -17,17 +10,18 @@ import {
   fetchSetMetadataFromRebrickable,
   type BuildPart,
 } from '../services/inventoryImport/rebrickable';
+import { upsertCatalogPartFromRebrickable } from '../db/catalogUpsert';
+import { upsertCatalogColorFromRebrickable } from '../db/catalogUpsert';
 import { useTheme, type Theme } from '../theme/ThemeProvider';
+import { ThemedText as Text } from '../components/ThemedText';
+import { ContainerPicker } from '../components/ContainerPicker';
 
 type ImportSetScreenProps = {
   onImported?: (itemId: number) => void;
 };
 
-type ContainerRow = { id: number; name: string };
-
 export default function ImportSetScreen({ onImported }: ImportSetScreenProps) {
   const [setNumber, setSetNumber] = useState('');
-  const [containers, setContainers] = useState<ContainerRow[]>([]);
   const [selectedContainerId, setSelectedContainerId] = useState<number | null>(null);
   const [loading, setLoading] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
@@ -36,45 +30,40 @@ export default function ImportSetScreen({ onImported }: ImportSetScreenProps) {
   const invalidSetMessage =
     "No LEGO set by that number was found.\n\nMake sure you included the correct digits (like '75192' or '75192-1').";
 
-  useEffect(() => {
-    let isMounted = true;
-    (async () => {
-      try {
-        const db = await getDb();
-        const rows = await db.getAllAsync<ContainerRow>(
-          `
-            SELECT id, name
-            FROM containers
-            ORDER BY name ASC;
-          `
-        );
-        if (isMounted) {
-          setContainers(rows);
-        }
-      } catch (error) {
-        console.error('Failed to load containers', error);
-      }
-    })();
-    return () => {
-      isMounted = false;
-    };
-  }, []);
-
-  const containerOptions = useMemo(
-    () => [{ id: -1, name: 'No container' }, ...containers],
-    [containers]
-  );
-
   async function insertBuildParts(parentId: number, parts: BuildPart[]) {
     const db = await getDb();
     for (const p of parts) {
       const subtype = (p.componentSubtype || 'Part').toLowerCase();
+      let catalogPartId: number | null = null;
+      let catalogColorId: number | null = null;
+      if (p.rebrickableId || p.designId) {
+        try {
+          // Ensure this Rebrickable part is present in the shared catalog and capture catalog_parts.id
+          catalogPartId = await upsertCatalogPartFromRebrickable({
+            id: (p.rebrickableId || p.designId || '').trim(),
+            name: p.componentName || p.designId || '',
+          });
+        } catch (error) {
+          console.warn('[ImportSet] catalog upsert failed', p.rebrickableId || p.designId, error);
+        }
+      }
+      if (p.componentColorId && p.componentColorName) {
+        try {
+          // Ensure Rebrickable color is captured in catalog_colors for future local lookups
+          catalogColorId = await upsertCatalogColorFromRebrickable({
+            id: p.componentColorId,
+            name: p.componentColorName,
+          });
+        } catch (error) {
+          console.warn('[ImportSet] color catalog upsert failed', p.componentColorId, error);
+        }
+      }
       await db.runAsync(
         `
           INSERT INTO build_parts
-            (parent_item_id, component_subtype, component_name, component_color, component_number, quantity, is_spare, image_uri)
+            (parent_item_id, component_subtype, component_name, component_color, component_number, component_bricklink_id, component_brickowl_id, component_rebrickable_id, catalog_part_id, catalog_color_id, quantity, is_spare, image_uri)
           VALUES
-            (?, ?, ?, ?, ?, ?, ?, ?);
+            (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
         `,
         [
           parentId,
@@ -82,6 +71,11 @@ export default function ImportSetScreen({ onImported }: ImportSetScreenProps) {
           p.componentName || null,
           p.componentColorName || null,
           p.designId || null,
+          p.bricklinkId ?? null,
+          p.brickowlId ?? null,
+          p.rebrickableId ?? p.designId ?? null,
+          catalogPartId,
+          catalogColorId,
           p.quantity ?? 0,
           p.isSpare ? 1 : 0,
           p.imageUrl || null,
@@ -124,7 +118,7 @@ export default function ImportSetScreen({ onImported }: ImportSetScreenProps) {
             'set',
             metadata.name ?? trimmed,
             metadata.setNum ?? trimmed,
-            selectedContainerId === -1 ? null : selectedContainerId,
+            selectedContainerId,
             1,
             null,
             null,
@@ -183,31 +177,12 @@ export default function ImportSetScreen({ onImported }: ImportSetScreenProps) {
           inputMode="numeric"
         />
 
-        <View style={styles.selector}>
-          <Text style={styles.selectorLabel}>Container</Text>
-          <View style={styles.optionList}>
-            {containerOptions.map(option => {
-              const isActive =
-                option.id === selectedContainerId ||
-                (option.id === -1 && selectedContainerId === null);
-              return (
-                <TouchableOpacity
-                  key={option.id}
-                  style={[styles.optionRow, isActive && styles.optionRowActive]}
-                  onPress={() =>
-                    setSelectedContainerId(option.id === -1 ? null : option.id)
-                  }
-                >
-                  <Text
-                    style={[styles.optionText, isActive && styles.optionTextActive]}
-                  >
-                    {option.name}
-                  </Text>
-                </TouchableOpacity>
-              );
-            })}
-          </View>
-        </View>
+        <ContainerPicker
+          label="Container"
+          selectedContainerId={selectedContainerId}
+          onChange={setSelectedContainerId}
+          allowCreateNew
+        />
 
         <Button
           label={loading ? 'Importing...' : 'Import from Rebrickable'}

@@ -1,5 +1,5 @@
 import React, { useMemo } from 'react';
-import { ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { ScrollView, StyleSheet, TouchableOpacity, View } from 'react-native';
 import { layout } from '../theme/layout';
 import { typography } from '../theme/typography';
 import {
@@ -7,8 +7,10 @@ import {
   type ThemePreference,
   type CategoryStandard,
   type ColorStandard,
+  type MarketStandard,
 } from '../settings/settingsStore';
 import { useTheme, type Theme } from '../theme/ThemeProvider';
+import { ThemedText as Text } from '../components/ThemedText';
 
 type Option<T> = { label: string; value: T };
 type StyleSet = ReturnType<typeof createStyles>;
@@ -101,6 +103,18 @@ export default function SettingsScreen() {
           { label: 'BrickOwl', value: 'brickowl' },
         ]}
         onSelect={value => updateSettings({ colorStandard: value })}
+      />
+
+      <OptionGroup<MarketStandard>
+        title="Marketplace Standard"
+        value={settings.marketStandard}
+        styles={styles}
+        options={[
+          { label: 'BrickLink', value: 'bricklink' },
+          { label: 'BrickOwl', value: 'brickowl' },
+          { label: 'Rebrickable', value: 'rebrickable' },
+        ]}
+        onSelect={value => updateSettings({ marketStandard: value })}
       />
     </ScrollView>
   );

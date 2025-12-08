@@ -1,8 +1,9 @@
 import React, { useMemo } from 'react';
-import { ScrollView, View, Text, StyleSheet } from 'react-native';
+import { ScrollView, View, StyleSheet } from 'react-native';
 import { layout } from '../theme/layout';
 import { typography } from '../theme/typography';
 import { useTheme, type Theme } from '../theme/ThemeProvider';
+import { ThemedText as Text } from '../components/ThemedText';
 
 const highlights = [
   'Track sets, parts, minifigs, and MOCs across rooms and containers.',

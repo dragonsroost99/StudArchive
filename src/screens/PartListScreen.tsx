@@ -1,30 +1,25 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
-import {
-  FlatList,
-  Image,
-  Modal,
-  StyleSheet,
-  Text,
-  TouchableOpacity,
-  View,
-} from 'react-native';
+import React, { useEffect, useMemo, useState } from 'react';
+import { Alert, FlatList, Image, Modal, StyleSheet, TouchableOpacity, View } from 'react-native';
 import { Input } from '../components/Input';
 import { Button } from '../components/Button';
 import { getDb } from '../db/database';
 import { layout } from '../theme/layout';
 import { typography } from '../theme/typography';
 import { useTheme, type Theme } from '../theme/ThemeProvider';
-import {
-  fetchAndCacheThumbnail,
-  getThumbnail,
-  normalizeColorId,
-} from '../services/thumbnailStore';
+import { getThumbnail, normalizeColorId } from '../services/thumbnailStore';
+import { ThemedText as Text } from '../components/ThemedText';
+import { useAppSettings } from '../settings/settingsStore';
+import { getMinifigDisplayId } from '../utils/marketDisplay';
+import { importBsxFile, pickBsxFile } from '../services/inventoryImport/importBsxFile';
 
 export type ItemRow = {
   id: number;
   type?: string;
   name: string;
   number?: string | null;
+  bricklink_id?: string | null;
+  brickowl_id?: string | null;
+  rebrickable_id?: string | null;
   color: string | null;
   qty: number | null;
   quantity?: number | null;
@@ -40,6 +35,7 @@ type PartListScreenProps = {
   onImportSet?: () => void;
   onCreateMoc?: () => void;
   onAddParts?: () => void;
+  onAddMinifig?: () => void;
 };
 
 type GroupedRow = {
@@ -54,6 +50,7 @@ export default function PartListScreen({
   onImportSet,
   onCreateMoc,
   onAddParts,
+  onAddMinifig,
 }: PartListScreenProps) {
   const [items, setItems] = useState<ItemRow[]>([]);
   const [searchText, setSearchText] = useState('');
@@ -62,12 +59,14 @@ export default function PartListScreen({
   const [selectedSubtype, setSelectedSubtype] = useState<
     'All' | 'Part' | 'Minifigure' | 'Set' | 'MOC'
   >('All');
+  const [importingBsx, setImportingBsx] = useState(false);
   const [containers, setContainers] = useState<
     { id: number; name: string; roomName?: string | null }[]
   >([]);
   const [thumbnailCache, setThumbnailCache] = useState<Record<string, string>>({});
-  const thumbnailRequests = useRef<Set<string>>(new Set());
   const theme = useTheme();
+  const { settings } = useAppSettings();
+  const marketStandard = settings?.marketStandard ?? 'bricklink';
   const styles = useMemo(() => createStyles(theme), [theme]);
   const buildThumbnailKey = (num?: string | null, color?: string | null) => {
     const trimmedNum = (num ?? '').trim();
@@ -84,6 +83,9 @@ export default function PartListScreen({
         type,
       name,
       number,
+      bricklink_id,
+      brickowl_id,
+      rebrickable_id,
       color,
       qty,
       qty AS quantity,
@@ -131,7 +133,6 @@ export default function PartListScreen({
         if (Object.prototype.hasOwnProperty.call(thumbnailCache, cacheKey)) {
           continue;
         }
-        if (thumbnailRequests.current.has(cacheKey)) continue;
         if (item.imageUri && item.imageUri.trim().length > 0) continue;
 
         try {
@@ -144,21 +145,7 @@ export default function PartListScreen({
             });
             continue;
           }
-          thumbnailRequests.current.add(cacheKey);
-          fetchAndCacheThumbnail(num, item.color)
-            .then(url => {
-              if (cancelled) return;
-              setThumbnailCache(prev => {
-                if (Object.prototype.hasOwnProperty.call(prev, cacheKey)) return prev;
-                return { ...prev, [cacheKey]: url };
-              });
-            })
-            .catch(error => {
-              console.warn('[PartList] Failed to fetch thumbnail', num, error);
-            })
-            .finally(() => {
-              thumbnailRequests.current.delete(cacheKey);
-            });
+          // No auto-fetch to avoid background API calls; leave placeholder.
         } catch (error) {
           console.warn('[PartList] Thumbnail lookup failed', num, error);
         }
@@ -204,7 +191,7 @@ export default function PartListScreen({
   const containerLabelMap = useMemo(() => {
     const map = new Map<number, string>();
     containers.forEach(c => {
-      const label = c.roomName ? `${c.roomName} · ${c.name}` : c.name;
+      const label = c.roomName ? `${c.roomName} - ${c.name}` : c.name;
       map.set(c.id, label);
     });
     return map;
@@ -332,8 +319,9 @@ export default function PartListScreen({
     const colorLabel = representative.color ?? 'Unknown color';
     const categoryLabel = representative.categoryName ?? null;
     const subtitleText = categoryLabel
-      ? `${colorLabel} · ${categoryLabel}`
+      ? `${colorLabel} - ${categoryLabel}`
       : colorLabel;
+    const descriptionText = (representative.description ?? '').trim();
     const directImage = representative.imageUri?.trim();
     const effectiveNumber = (representative.number ?? '').trim();
     const cacheKey = buildThumbnailKey(effectiveNumber, representative.color);
@@ -344,6 +332,18 @@ export default function PartListScreen({
       null;
     const typeKey = (representative.type ?? '').toLowerCase();
     const isSetOrMoc = typeKey === 'set' || typeKey === 'moc';
+    const isMinifig = typeKey === 'minifig';
+    const displayNumber =
+      isMinifig && effectiveNumber
+        ? getMinifigDisplayId(
+            {
+              rebrickable_id: representative.rebrickable_id ?? effectiveNumber,
+              bricklink_id: representative.bricklink_id ?? null,
+              brickowl_id: representative.brickowl_id ?? null,
+            },
+            marketStandard
+          )
+        : null;
     const placeholderStyle =
       typeKey === 'set'
         ? styles.thumbPlaceholderSet
@@ -399,6 +399,12 @@ export default function PartListScreen({
           <View style={{ flex: 1 }}>
             <Text style={styles.title}>{representative.name}</Text>
             <Text style={styles.subtitle}>{subtitleText}</Text>
+            {descriptionText ? (
+              <Text style={styles.description}>{descriptionText}</Text>
+            ) : null}
+            {displayNumber ? (
+              <Text style={styles.meta}>Fig ID: {displayNumber}</Text>
+            ) : null}
             <Text style={styles.meta}>{locationLabel}</Text>
           </View>
           <View style={styles.qtyBadge}>
@@ -408,6 +414,33 @@ export default function PartListScreen({
         </View>
       </TouchableOpacity>
     );
+  }
+
+  async function handleImportBsx() {
+    try {
+      const picked = await pickBsxFile();
+      if (!picked) return;
+      setImportingBsx(true);
+      const db = await getDb();
+      const summary = await importBsxFile(db, picked.uri, 'merge');
+      const parts = [
+        `File: ${summary.fileName ?? 'Unknown'}`,
+        `Lots: ${summary.mappedLots}/${summary.totalLots}`,
+        `Pieces: ${summary.totalPieces}`,
+        summary.unmappedLots > 0
+          ? `Unmapped: ${summary.unmappedLots} (kept separate)`
+          : 'Unmapped: 0',
+        summary.unmappedLots > 0 && summary.mappedLots === 0
+          ? 'No lots were imported. Make sure BrickLink part/color IDs exist in crossrefs.'
+          : null,
+      ].filter((line): line is string => Boolean(line));
+      Alert.alert('BSX import finished', parts.join('\n'));
+    } catch (error: any) {
+      console.error('BSX import failed', error);
+      Alert.alert('Import failed', error?.message ?? 'Could not import BSX file.');
+    } finally {
+      setImportingBsx(false);
+    }
   }
 
   return (
@@ -423,8 +456,20 @@ export default function PartListScreen({
           <View style={styles.controls}>
             <View style={styles.actionsRow}>
               <Button label="Import Set" onPress={onImportSet} />
+              <Button
+                label={importingBsx ? 'Importing...' : 'Import BSX'}
+                onPress={handleImportBsx}
+                disabled={importingBsx}
+              />
               <Button label="Create MOC" variant="outline" onPress={onCreateMoc} />
               <Button label="Add Parts" variant="outline" onPress={onAddParts} />
+              {selectedSubtype === 'Minifigure' ? (
+                <Button
+                  label="Add Minifigure"
+                  variant="outline"
+                  onPress={() => onAddMinifig?.()}
+                />
+              ) : null}
             </View>
             <View style={styles.tabRow}>
               {subtypeFilters.map(filter => {
@@ -694,6 +739,11 @@ function createStyles(theme: Theme) {
     fontSize: typography.caption,
     color: colors.textMuted,
   },
+  description: {
+    marginTop: layout.spacingXs / 4,
+    fontSize: typography.caption,
+    color: colors.textSecondary,
+  },
   meta: {
     marginTop: layout.spacingXs / 2,
     fontSize: typography.caption,
@@ -726,6 +776,9 @@ function createStyles(theme: Theme) {
   },
   });
 }
+
+
+
 
 
 

@@ -12,9 +12,10 @@ export const colors = {
   primarySoft: '#1E293B',  // dark soft blue for chips / pills
 
   // Text
-  text: '#E5E7EB',         // light gray
-  textMuted: '#9CA3AF',    // muted gray
-  heading: '#F9FAFB',      // almost white
+  text: '#F9FAFB',         // high-contrast light text
+  textMuted: '#CBD5E1',    // brighter muted gray for dark mode readability
+  textSecondary: '#CBD5E1', // align secondary with muted for clarity
+  heading: '#FFFFFF',      // fully bright headings
 
   // Chips
   chipBorder: '#334155',

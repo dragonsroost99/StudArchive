@@ -4,7 +4,6 @@ import {
   Modal,
   ScrollView,
   StyleSheet,
-  Text,
   TouchableOpacity,
   View,
 } from 'react-native';
@@ -14,6 +13,7 @@ import { getDb } from '../db/database';
 import { layout } from '../theme/layout';
 import { typography } from '../theme/typography';
 import { useTheme, type Theme } from '../theme/ThemeProvider';
+import { ThemedText as Text } from '../components/ThemedText';
 
 type ContainerDetailParams = {
   containerId: number;

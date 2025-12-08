@@ -1,3 +1,4 @@
+// Main part search UI (local-first).
 import React, { useEffect, useMemo, useState } from 'react';
 import {
   Alert,
@@ -5,31 +6,35 @@ import {
   Platform,
   ScrollView,
   StyleSheet,
-  Text,
-  Image,
   Pressable,
   TouchableOpacity,
+  Image,
+  Modal,
   View,
 } from 'react-native';
 import { Input } from '../components/Input';
 import { Button } from '../components/Button';
 import { getDb } from '../db/database';
+import { searchCatalogWithFallback } from '../db/catalogSearch';
 import { layout } from '../theme/layout';
 import { typography } from '../theme/typography';
+import { Keyboard } from 'react-native';
+import { useTheme, type Theme } from '../theme/ThemeProvider';
+import { ThemedText as Text } from '../components/ThemedText';
+import { ContainerPicker } from '../components/ContainerPicker';
+import { useAppSettings } from '../settings/settingsStore';
+import { fetchAndCacheThumbnail } from '../services/thumbnailStore';
 import {
-  searchPartsOnRebrickable,
-  type RebrickablePartSearchResult,
   fetchPartColorsFromRebrickable,
   type RebrickablePartColor,
 } from '../services/inventoryImport/rebrickable';
-import { Keyboard } from 'react-native';
-import { useTheme, type Theme } from '../theme/ThemeProvider';
+import { ensureRoomsTable } from '../db/rooms';
+import { ensureContainersTable } from '../db/containers';
+import { upsertCatalogColorFromRebrickable } from '../db/catalogUpsert';
 
 type AddPartsScreenProps = {
   onAdded?: (itemId: number) => void;
 };
-
-type ContainerRow = { id: number; name: string; roomName?: string | null };
 
 export default function AddPartsScreen({ onAdded }: AddPartsScreenProps) {
   const [name, setName] = useState('');
@@ -38,52 +43,31 @@ export default function AddPartsScreen({ onAdded }: AddPartsScreenProps) {
   const [category, setCategory] = useState('');
   const [description, setDescription] = useState('');
   const [quantity, setQuantity] = useState('1');
-  const [containers, setContainers] = useState<ContainerRow[]>([]);
   const [selectedContainerId, setSelectedContainerId] = useState<number | null>(null);
   const [saving, setSaving] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
-  const [searchResults, setSearchResults] = useState<RebrickablePartSearchResult[]>([]);
+  const [searchResults, setSearchResults] = useState<
+    Array<{
+      partId: number;
+      shapeKey: string;
+      genericName: string;
+      platformId?: string | null;
+      imageUri?: string | null;
+    }>
+  >([]);
   const [searchLoading, setSearchLoading] = useState(false);
   const [searchError, setSearchError] = useState<string | null>(null);
   const [partColors, setPartColors] = useState<RebrickablePartColor[]>([]);
   const [selectedColorId, setSelectedColorId] = useState<number | null>(null);
   const [colorLoading, setColorLoading] = useState(false);
   const [lastColorLookupPart, setLastColorLookupPart] = useState<string | null>(null);
+  const [colorModalVisible, setColorModalVisible] = useState(false);
+  const [lastSelectedShapeKey, setLastSelectedShapeKey] = useState<string | null>(null);
   const [imageUri, setImageUri] = useState<string>('');
+  const [fallbackContainerId, setFallbackContainerId] = useState<number | null>(null);
   const theme = useTheme();
+  const { settings } = useAppSettings();
   const styles = useMemo(() => createStyles(theme), [theme]);
-
-  useEffect(() => {
-    let isMounted = true;
-    (async () => {
-      try {
-        const db = await getDb();
-        const rows = await db.getAllAsync<ContainerRow>(
-          `
-            SELECT c.id, c.name, r.name AS roomName
-            FROM containers c
-            LEFT JOIN rooms r ON r.id = c.room_id
-            ORDER BY r.name ASC, c.name ASC;
-          `
-        );
-        if (isMounted) {
-          setContainers(rows);
-        }
-      } catch (error) {
-        console.error('Failed to load containers', error);
-      }
-    })();
-    return () => {
-      isMounted = false;
-    };
-  }, []);
-
-  const containerOptions = useMemo(() => {
-    return [
-      { id: -1, name: 'No container', roomName: null },
-      ...containers,
-    ];
-  }, [containers]);
 
   async function handleSave() {
     const trimmedName = name.trim();
@@ -91,67 +75,42 @@ export default function AddPartsScreen({ onAdded }: AddPartsScreenProps) {
       Alert.alert('Name required', 'Enter a part name to continue.');
       return;
     }
+    const containerId =
+      selectedContainerId ??
+      fallbackContainerId ??
+      (await getOrCreateUndefinedContainer());
+    setFallbackContainerId(containerId);
     const parsedQty = parseInt(quantity, 10);
     const qtyValue = Number.isNaN(parsedQty) || parsedQty < 1 ? 1 : parsedQty;
-    async function resolveContainerId(): Promise<number> {
-      if (selectedContainerId != null && selectedContainerId !== -1) {
-        return selectedContainerId;
-      }
-      const db = await getDb();
-      // Ensure a default "Unassigned" room exists
-      const roomRows = await db.getAllAsync<{ id: number }>(
-        `SELECT id FROM rooms WHERE name = ? LIMIT 1;`,
-        ['Unassigned']
-      );
-      let roomId = roomRows[0]?.id ?? null;
-      if (!roomId) {
-        await db.runAsync(`INSERT INTO rooms (name) VALUES (?);`, ['Unassigned']);
-        const newRoom = await db.getAllAsync<{ id: number }>(
-          `SELECT id FROM rooms WHERE name = ? ORDER BY id DESC LIMIT 1;`,
-          ['Unassigned']
-        );
-        roomId = newRoom[0]?.id ?? null;
-      }
-      if (!roomId) {
-        throw new Error('Unable to create default room for unassigned parts.');
-      }
-      const containerRows = await db.getAllAsync<{ id: number }>(
-        `SELECT id FROM containers WHERE name = ? AND room_id = ? LIMIT 1;`,
-        ['No container', roomId]
-      );
-      let containerId = containerRows[0]?.id ?? null;
-      if (!containerId) {
-        await db.runAsync(
-          `INSERT INTO containers (name, room_id) VALUES (?, ?);`,
-          ['No container', roomId]
-        );
-        const newContainer = await db.getAllAsync<{ id: number }>(
-          `SELECT id FROM containers WHERE name = ? AND room_id = ? ORDER BY id DESC LIMIT 1;`,
-          ['No container', roomId]
-        );
-        containerId = newContainer[0]?.id ?? null;
-      }
-      if (!containerId) {
-        throw new Error('Unable to create default container for unassigned parts.');
-      }
-      return containerId;
-    }
     setSaving(true);
     try {
       const db = await getDb();
-      const resolvedContainerId = await resolveContainerId();
+      let catalogColorId: number | null = null;
+      if (selectedColorId) {
+        const matchedColor = partColors.find(c => c.colorId === selectedColorId);
+        if (matchedColor) {
+          try {
+            catalogColorId = await upsertCatalogColorFromRebrickable({
+              id: matchedColor.colorId,
+              name: matchedColor.name,
+            });
+          } catch (error) {
+            console.warn('[AddParts] catalog color upsert failed', matchedColor.colorId, error);
+          }
+        }
+      }
       await db.runAsync(
-        `
-          INSERT INTO items
-            (type, name, number, container_id, qty, condition, color, category, description, value_each, value_total, image_uri)
-          VALUES
-            (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+            `
+              INSERT INTO items
+                (type, name, number, container_id, qty, condition, color, category, description, value_each, value_total, image_uri, catalog_color_id)
+            VALUES
+            (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
         `,
         [
           'part',
           trimmedName,
           number.trim() || null,
-          resolvedContainerId,
+          containerId,
           qtyValue,
           null,
           color.trim() || null,
@@ -160,6 +119,7 @@ export default function AddPartsScreen({ onAdded }: AddPartsScreenProps) {
           null,
           null,
           imageUri.trim() || null,
+          catalogColorId,
         ]
       );
 
@@ -188,24 +148,108 @@ export default function AddPartsScreen({ onAdded }: AddPartsScreenProps) {
     }
   }
 
+  async function getOrCreateUndefinedContainer(): Promise<number> {
+    const db = await getDb();
+    await ensureRoomsTable();
+    await ensureContainersTable();
+    const roomName = 'Undefined';
+    const containerName = 'Undefined';
+    await db.runAsync(
+      `INSERT OR IGNORE INTO rooms (name) VALUES (?);`,
+      roomName
+    );
+    const roomRow = await db.getFirstAsync<{ id: number }>(
+      `SELECT id FROM rooms WHERE name = ? LIMIT 1;`,
+      roomName
+    );
+    const roomId = roomRow?.id ?? null;
+    await db.runAsync(
+      `INSERT OR IGNORE INTO containers (name, room_id) VALUES (?, ?);`,
+      containerName,
+      roomId
+    );
+    const containerRow = await db.getFirstAsync<{ id: number }>(
+      `SELECT id FROM containers WHERE name = ? AND room_id = ? LIMIT 1;`,
+      containerName,
+      roomId
+    );
+    if (!containerRow?.id) {
+      throw new Error('Failed to create Undefined container');
+    }
+    return containerRow.id;
+  }
+
   async function handleSearch() {
     const query = searchQuery.trim();
-    if (!query) return;
+    if (!query) {
+      setSearchResults([]);
+      setSearchError(null);
+      return;
+    }
     setSearchLoading(true);
     setSearchError(null);
     try {
-      const results = await searchPartsOnRebrickable(query);
+      const preferredSource =
+        (settings?.marketStandard ?? 'BRICKLINK').toString().toUpperCase() as
+          | 'BRICKLINK'
+          | 'REBRICKABLE'
+          | 'BRICKOWL';
+      const baseResults = await searchCatalogWithFallback(query, preferredSource);
+      const resultsWithThumbs = await Promise.all(
+        baseResults.map(async r => {
+          try {
+            const thumb = await fetchAndCacheThumbnail(r.shapeKey, null);
+            return { ...r, imageUri: thumb || undefined };
+          } catch {
+            return { ...r, imageUri: undefined };
+          }
+        })
+      );
+      const results = resultsWithThumbs;
       setSearchResults(results);
+      setPartColors([]);
+      setSelectedColorId(null);
+      setLastColorLookupPart(null);
       if (results.length === 0) {
-        setSearchError('No parts found. Check the number or try a different description.');
+        setSearchError('No parts found locally or on Rebrickable.');
       }
     } catch (error) {
       console.error('Part search failed', error);
-      setSearchError("The Archivists couldn't reach Rebrickable. Please try again.");
+      setSearchError('Search failed. Please try again.');
     } finally {
       setSearchLoading(false);
     }
   }
+
+  // Backfill thumbnails for results that don't have one yet
+  useEffect(() => {
+    let cancelled = false;
+    const fillThumbs = async () => {
+      const missing = searchResults.filter(r => !r.imageUri);
+      if (!missing.length) return;
+      const updates: Array<{ shapeKey: string; imageUri: string | null }> = [];
+      for (const r of missing) {
+        try {
+          const thumb = await fetchAndCacheThumbnail(r.shapeKey, null);
+          updates.push({ shapeKey: r.shapeKey, imageUri: thumb ?? '' });
+        } catch {
+          updates.push({ shapeKey: r.shapeKey, imageUri: '' });
+        }
+      }
+      if (cancelled) return;
+      setSearchResults(prev =>
+        prev.map(item => {
+          const found = updates.find(u => u.shapeKey === item.shapeKey);
+          if (!found) return item;
+          return { ...item, imageUri: found.imageUri ?? '' };
+        })
+      );
+    };
+    void fillThumbs();
+    return () => {
+      cancelled = true;
+    };
+  }, [searchResults]);
 
   async function loadPartColors(partNum: string) {
     const trimmed = partNum.trim();
@@ -218,12 +262,10 @@ export default function AddPartsScreen({ onAdded }: AddPartsScreenProps) {
     if (trimmed === lastColorLookupPart && partColors.length > 0) {
       return;
     }
-    // Clear existing choices while loading new ones
     setPartColors([]);
     setSelectedColorId(null);
     setColorLoading(true);
     try {
-      console.log('[AddParts] Fetching colors for partNum', trimmed);
       const colors = await fetchPartColorsFromRebrickable(trimmed);
       setPartColors(colors);
       setLastColorLookupPart(trimmed);
@@ -233,7 +275,7 @@ export default function AddPartsScreen({ onAdded }: AddPartsScreenProps) {
         setColor(only.name);
       }
     } catch (error) {
-      console.warn('Failed to fetch part colors', error);
+      console.warn('[AddParts] Failed to fetch part colors', { partNum: trimmed }, error);
       setPartColors([]);
       setSelectedColorId(null);
       setLastColorLookupPart(null);
@@ -266,7 +308,7 @@ export default function AddPartsScreen({ onAdded }: AddPartsScreenProps) {
             placeholder="e.g. 3001 or brick 2x4"
           />
           <Button
-            label={searchLoading ? 'Searching...' : 'Search Rebrickable'}
+            label={searchLoading ? 'Searching...' : 'Search parts'}
             onPress={handleSearch}
             disabled={searchLoading}
             style={styles.searchButton}
@@ -276,32 +318,42 @@ export default function AddPartsScreen({ onAdded }: AddPartsScreenProps) {
             <View style={styles.searchResults}>
               {searchResults.map(result => (
                 <Pressable
-                  key={`${result.partNum}-${result.name}`}
+                  key={`${result.partId}-${result.shapeKey}`}
                   style={styles.searchResultRow}
                   onPress={async () => {
-                    setNumber(result.partNum);
-                    setName(result.name);
-                    setSearchQuery(result.partNum);
+                    const resolvedNumber = result.platformId ?? result.shapeKey;
+                    setNumber(resolvedNumber);
+                    setName(result.genericName);
+                    setSearchQuery(resolvedNumber);
                     setSearchResults([]);
-                    setImageUri(result.imageUrl ?? '');
+                    let thumbUri = result.imageUri?.trim() ?? '';
+                    if (!thumbUri) {
+                      try {
+                        thumbUri = (await fetchAndCacheThumbnail(result.shapeKey, null)) ?? '';
+                      } catch {
+                        thumbUri = '';
+                      }
+                    }
+                    setImageUri(thumbUri);
+                    setLastSelectedShapeKey(result.shapeKey);
                     Keyboard.dismiss();
-                    console.log('[AddParts] Selected part for colors', {
-                      partNum: result.partNum,
-                      name: result.name,
-                    });
-                    await loadPartColors(result.partNum);
+                    await loadPartColors(result.shapeKey);
                   }}
                 >
-                  {result.imageUrl ? (
-                    <Image source={{ uri: result.imageUrl }} style={styles.searchResultImage} />
-                  ) : (
-                    <View style={styles.searchResultPlaceholder}>
-                      <Text style={styles.searchResultPlaceholderText}>No image</Text>
-                    </View>
-                  )}
+              {result.imageUri?.trim() ? (
+                <Image source={{ uri: result.imageUri.trim() }} style={styles.searchResultImage} />
+              ) : (
+                <View style={styles.searchResultPlaceholder}>
+                  <Text style={styles.searchResultPlaceholderText}>No image</Text>
+                </View>
+              )}
                   <View style={{ flex: 1 }}>
-                    <Text style={styles.searchResultTitle}>{result.name}</Text>
-                    <Text style={styles.searchResultSubtitle}>#{result.partNum}</Text>
+                    <Text style={styles.searchResultTitle}>{result.genericName}</Text>
+                    {result.platformId ? (
+                      <Text style={styles.searchResultSubtitle}>#{result.platformId}</Text>
+                    ) : (
+                      <Text style={styles.searchResultSubtitle}>Shape: {result.shapeKey}</Text>
+                    )}
                   </View>
                 </Pressable>
               ))}
@@ -327,61 +379,31 @@ export default function AddPartsScreen({ onAdded }: AddPartsScreenProps) {
             onChangeText={setNumber}
             placeholder="e.g. 3023"
           />
-          {partColors.length > 0 ? (
-            <View style={styles.selector}>
-              <Text style={styles.selectorLabel}>Colors from Rebrickable</Text>
-              {colorLoading ? (
-                <Text style={styles.metaMuted}>Loading colors…</Text>
-              ) : null}
-              <View style={styles.optionList}>
-                {partColors.map(option => {
-                  const isActive = option.colorId === selectedColorId;
-                  return (
-                    <TouchableOpacity
-                      key={option.colorId}
-                      style={[styles.optionRow, isActive && styles.optionRowActive]}
-                      onPress={() => {
-                        setSelectedColorId(option.colorId);
-                        setColor(option.name);
-                        if (option.imageUrl) {
-                          setImageUri(option.imageUrl);
-                        }
-                        setPartColors([]);
-                      }}
-                    >
-                      <Text
-                        style={[styles.optionText, isActive && styles.optionTextActive]}
-                      >
-                        {option.name}
-                      </Text>
-                    </TouchableOpacity>
-                  );
-                })}
-              </View>
-            </View>
-          ) : null}
           <Input
             label="Color"
             value={color}
             onChangeText={setColor}
+           onFocus={async () => {
+             const key = lastSelectedShapeKey ?? number;
+             if (!partColors.length && key.trim()) {
+               await loadPartColors(key);
+             }
+             setColorModalVisible(true);
+           }}
             placeholder="Dark Bluish Gray, etc."
           />
-          {lastColorLookupPart &&
-          !colorLoading &&
-          partColors.length === 0 &&
-          selectedColorId === null ? (
-            <>
-              <Text style={styles.metaMuted}>
-                No Rebrickable colors returned. Enter a color manually.
-              </Text>
-              <Text style={styles.metaMuted}>
-                Check logs for [Rebrickable]/[AddParts] messages if this seems wrong.
-              </Text>
-            </>
-          ) : null}
-          {colorLoading ? (
-            <Text style={styles.metaMuted}>Loading colors…</Text>
-          ) : null}
+          <Button
+            label={colorLoading ? 'Loading colors...' : 'Choose color'}
+            variant="outline"
+            disabled={colorLoading || (!lastSelectedShapeKey && !number.trim())}
+            onPress={async () => {
+              const key = lastSelectedShapeKey ?? number;
+              if (key.trim()) {
+                await loadPartColors(key);
+              }
+              setColorModalVisible(true);
+            }}
+          />
           <Input
             label="Category (optional)"
             value={category}
@@ -397,31 +419,12 @@ export default function AddPartsScreen({ onAdded }: AddPartsScreenProps) {
             placeholder="1"
           />
 
-          <View style={styles.selector}>
-            <Text style={styles.selectorLabel}>Container</Text>
-            <View style={styles.optionList}>
-              {containerOptions.map(option => {
-                const isActive =
-                  option.id === selectedContainerId ||
-                  (option.id === -1 && selectedContainerId === null);
-                return (
-                  <TouchableOpacity
-                    key={option.id}
-                    style={[styles.optionRow, isActive && styles.optionRowActive]}
-                    onPress={() =>
-                      setSelectedContainerId(option.id === -1 ? null : option.id)
-                    }
-                  >
-                    <Text
-                      style={[styles.optionText, isActive && styles.optionTextActive]}
-                    >
-                      {option.roomName ? `${option.roomName} - ${option.name}` : option.name}
-                    </Text>
-                  </TouchableOpacity>
-                );
-              })}
-            </View>
-          </View>
+          <ContainerPicker
+            label="Container"
+            selectedContainerId={selectedContainerId}
+            onChange={setSelectedContainerId}
+            allowCreateNew
+          />
 
           <Button
             label={saving ? 'Saving...' : 'Add Part'}
@@ -431,6 +434,57 @@ export default function AddPartsScreen({ onAdded }: AddPartsScreenProps) {
           <View style={{ height: layout.spacingXl }} />
         </View>
       </ScrollView>
+
+      <Modal
+        visible={colorModalVisible}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setColorModalVisible(false)}
+      >
+        <TouchableOpacity
+          style={styles.modalOverlay}
+          activeOpacity={1}
+          onPress={() => setColorModalVisible(false)}
+        >
+          <View style={styles.modalCard}>
+            <Text style={styles.sectionTitle}>Select Color</Text>
+            {colorLoading ? (
+              <Text style={styles.metaMuted}>Loading colors…</Text>
+            ) : null}
+            {partColors.length === 0 && !colorLoading ? (
+              <Text style={styles.metaMuted}>No colors yet. Try searching or enter manually.</Text>
+            ) : null}
+            {partColors.map(option => {
+              const isActive = option.colorId === selectedColorId;
+              return (
+                <TouchableOpacity
+                  key={option.colorId}
+                  style={[styles.optionRow, isActive && styles.optionRowActive]}
+                  onPress={async () => {
+                    setSelectedColorId(option.colorId);
+                    setColor(option.name);
+                    try {
+                      const thumb = await fetchAndCacheThumbnail(
+                        lastSelectedShapeKey ?? number,
+                        option.colorId
+                      );
+                      setImageUri(thumb ?? '');
+                    } catch {
+                      // ignore thumbnail errors
+                    }
+                    setColorModalVisible(false);
+                  }}
+                >
+                  <Text style={[styles.optionText, isActive && styles.optionTextActive]}>
+                    {option.name}
+                  </Text>
+                </TouchableOpacity>
+              );
+            })}
+            <Button label="Close" variant="outline" onPress={() => setColorModalVisible(false)} />
+          </View>
+        </TouchableOpacity>
+      </Modal>
     </KeyboardAvoidingView>
   );
 }
@@ -441,6 +495,20 @@ function createStyles(theme: Theme) {
     container: {
       flex: 1,
       backgroundColor: colors.background,
+    },
+    modalOverlay: {
+      flex: 1,
+      backgroundColor: '#00000066',
+      justifyContent: 'center',
+      padding: layout.spacingLg,
+    },
+    modalCard: {
+      backgroundColor: colors.surface,
+      borderRadius: layout.radiusLg,
+      padding: layout.spacingLg,
+      borderWidth: 1,
+      borderColor: colors.border,
+      gap: layout.spacingSm,
     },
     content: {
       padding: layout.spacingLg,
@@ -557,5 +625,7 @@ function createStyles(theme: Theme) {
     },
   });
 }
+
+
 
 

@@ -1,5 +1,5 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { ScrollView, View, Text, StyleSheet, Modal, TouchableOpacity, Alert, Image } from 'react-native';
+import React, { useEffect, useMemo, useState } from 'react';
+import { ScrollView, View, StyleSheet, Modal, TouchableOpacity, Alert, Image } from 'react-native';
 import { Button } from '../components/Button';
 import { Input } from '../components/Input';
 import { getDb } from '../db/database';
@@ -12,11 +12,16 @@ import {
 } from '../services/inventoryImport/rebrickable';
 import { listLooseParts, type LoosePartRow } from '../db/items';
 import { useTheme, type Theme } from '../theme/ThemeProvider';
+import { getThumbnail, normalizeColorId } from '../services/thumbnailStore';
+import { ThemedText as Text } from '../components/ThemedText';
+import { useAppSettings } from '../settings/settingsStore';
+import { getMinifigDisplayId } from '../utils/marketDisplay';
+import { ContainerPicker } from '../components/ContainerPicker';
+import { resolveCatalogColorById } from '../db/catalogColors';
 import {
-  fetchAndCacheThumbnail,
-  getThumbnail,
-  normalizeColorId,
-} from '../services/thumbnailStore';
+  upsertCatalogColorFromRebrickable,
+  upsertCatalogPartFromRebrickable,
+} from '../db/catalogUpsert';
 
 export type PartDetailParams = {
   partId: string;
@@ -41,6 +46,9 @@ type PartRecord = {
   id?: number | string | null;
   name?: string | null;
   number?: string | null;
+  bricklink_id?: string | null;
+  brickowl_id?: string | null;
+  rebrickable_id?: string | null;
   qty?: number | null;
   quantity?: number | null;
   color?: string | null;
@@ -52,6 +60,7 @@ type PartRecord = {
   condition?: string | null;
   container_id?: number | null;
   image_uri?: string | null;
+  catalog_color_id?: number | null;
 };
 
 type BuildPartRow = {
@@ -59,6 +68,9 @@ type BuildPartRow = {
   componentSubtype: string | null;
   componentName: string | null;
   componentNumber: string | null;
+  componentBricklinkId?: string | null;
+  componentBrickowlId?: string | null;
+  componentRebrickableId?: string | null;
   componentColor: string | null;
   componentCategory: string | null;
   componentDescription: string | null;
@@ -66,6 +78,7 @@ type BuildPartRow = {
   quantity: number | null;
   isSpare: number | null;
   imageUri?: string | null;
+  catalogColorId?: number | null;
 };
 
 export default function PartDetailScreen({
@@ -96,9 +109,6 @@ export default function PartDetailScreen({
     quantity: number;
   } | null>(null);
   const [selectedItem, setSelectedItem] = useState<PartRecord | null>(null);
-  const [containers, setContainers] = useState<
-    { id: number; name: string; roomName?: string | null }[]
-  >([]);
   const [moveModalVisible, setMoveModalVisible] = useState(false);
   const [destinationContainerId, setDestinationContainerId] = useState<number | null>(null);
   const [moveQty, setMoveQty] = useState('');
@@ -121,9 +131,10 @@ export default function PartDetailScreen({
   const [inventoryThumbnailCache, setInventoryThumbnailCache] = useState<Record<string, string>>(
     {}
   );
-  const inventoryThumbRequests = useRef<Set<string>>(new Set());
+  const { settings: appSettings } = useAppSettings();
   const theme = useTheme();
   const styles = useMemo(() => createStyles(theme), [theme]);
+  const marketStandard = appSettings?.marketStandard ?? 'bricklink';
 
 async function loadPartById(id: string): Promise<PartRecord | null> {
     const db = await getDb();
@@ -133,6 +144,9 @@ async function loadPartById(id: string): Promise<PartRecord | null> {
           id,
           name,
           number,
+          bricklink_id,
+          brickowl_id,
+          rebrickable_id,
           qty,
           qty AS quantity,
           image_uri,
@@ -143,7 +157,8 @@ async function loadPartById(id: string): Promise<PartRecord | null> {
           description AS desc,
           type,
           condition,
-          container_id
+          container_id,
+          catalog_color_id
         FROM items
         WHERE id = ?
         LIMIT 1;
@@ -161,8 +176,26 @@ async function loadPartById(id: string): Promise<PartRecord | null> {
       try {
         const record = await loadPartById(partId);
         if (isMounted) {
+          if (record?.catalog_color_id) {
+            const resolved = await resolveCatalogColorById(record.catalog_color_id);
+            if (resolved?.name) {
+              record.color = resolved.name;
+              record.color_name = resolved.name;
+            }
+          }
           setPart(record ?? null);
           if (record) {
+            if (record.catalog_color_id) {
+              try {
+                const resolved = await resolveCatalogColorById(record.catalog_color_id);
+                if (resolved?.name) {
+                  record.color = resolved.name;
+                  record.color_name = resolved.name;
+                }
+              } catch (err) {
+                console.warn('[PartDetail] Failed to resolve catalog color', err);
+              }
+            }
             await loadLocations(record, isMounted);
             if (isSetOrMocType(record.type)) {
               await loadBuildParts(record, isMounted);
@@ -190,32 +223,6 @@ async function loadPartById(id: string): Promise<PartRecord | null> {
       isMounted = false;
     };
   }, [partId, refreshKey]);
-
-  useEffect(() => {
-    let isMounted = true;
-    (async () => {
-      try {
-        const db = await getDb();
-        const rows = await db.getAllAsync<{ id: number; name: string; roomName: string | null }>(`
-          SELECT
-            c.id,
-            c.name,
-            r.name AS roomName
-          FROM containers c
-          LEFT JOIN rooms r ON r.id = c.room_id
-          ORDER BY c.name ASC;
-        `);
-        if (isMounted) {
-          setContainers(rows);
-        }
-      } catch (e: any) {
-        console.error('Failed to load containers', e);
-      }
-    })();
-    return () => {
-      isMounted = false;
-    };
-  }, []);
 
   useEffect(() => {
     const targetId = selectedLocation?.itemId;
@@ -363,10 +370,14 @@ async function loadPartById(id: string): Promise<PartRecord | null> {
           component_subtype AS componentSubtype,
           component_name AS componentName,
           component_number AS componentNumber,
+          component_bricklink_id AS componentBricklinkId,
+          component_brickowl_id AS componentBrickowlId,
+          component_rebrickable_id AS componentRebrickableId,
           component_color AS componentColor,
           component_category AS componentCategory,
           component_description AS componentDescription,
           component_condition AS componentCondition,
+          catalog_color_id AS catalogColorId,
           image_uri AS imageUri,
           quantity,
           is_spare AS isSpare
@@ -388,7 +399,18 @@ async function loadPartById(id: string): Promise<PartRecord | null> {
 
     if (!isMountedFlag) return;
     setLooseOwnedMap(looseMap);
-    setBuildParts(rows);
+    const withResolvedColors = await Promise.all(
+      rows.map(async row => {
+        if (row.catalogColorId) {
+          const resolved = await resolveCatalogColorById(row.catalogColorId);
+          if (resolved?.name) {
+            return { ...row, componentColor: resolved.name };
+          }
+        }
+        return row;
+      })
+    );
+    setBuildParts(withResolvedColors);
   }
 
   function openInventoryModalForAdd() {
@@ -526,12 +548,35 @@ async function loadPartById(id: string): Promise<PartRecord | null> {
             continue;
           }
         }
+        let catalogPartId: number | null = null;
+        let catalogColorId: number | null = null;
+        if (p.rebrickableId || p.designId) {
+          try {
+            // Ensure this Rebrickable part is present in the shared catalog for downstream lookups
+            catalogPartId = await upsertCatalogPartFromRebrickable({
+              id: (p.rebrickableId || p.designId || '').trim(),
+              name: p.componentName || p.designId || '',
+            });
+          } catch (error) {
+            console.warn('[PartDetail] catalog part upsert failed', p.rebrickableId || p.designId, error);
+          }
+        }
+        if (p.componentColorId && p.componentColorName) {
+          try {
+            catalogColorId = await upsertCatalogColorFromRebrickable({
+              id: p.componentColorId,
+              name: p.componentColorName,
+            });
+          } catch (error) {
+            console.warn('[PartDetail] catalog color upsert failed', p.componentColorId, error);
+          }
+        }
         await db.runAsync(
           `
             INSERT INTO build_parts
-              (parent_item_id, component_subtype, component_name, component_color, component_number, quantity, is_spare, component_description)
+              (parent_item_id, component_subtype, component_name, component_color, component_number, component_bricklink_id, component_brickowl_id, component_rebrickable_id, catalog_part_id, catalog_color_id, quantity, is_spare, component_description)
             VALUES
-              (?, ?, ?, ?, ?, ?, ?, ?);
+              (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
           `,
           [
             parentId,
@@ -539,6 +584,11 @@ async function loadPartById(id: string): Promise<PartRecord | null> {
             p.componentName || null,
             p.componentColorName || null,
             p.designId || null,
+            p.bricklinkId ?? null,
+            p.brickowlId ?? null,
+            p.rebrickableId ?? p.designId ?? null,
+            catalogPartId,
+            catalogColorId,
             p.quantity ?? 0,
             p.isSpare ? 1 : 0,
             p.imageUrl ?? null,
@@ -623,13 +673,6 @@ async function loadPartById(id: string): Promise<PartRecord | null> {
     }
   }
 
-  const containerLabel = useMemo(() => {
-    if (destinationContainerId == null) return 'No container';
-    const match = containers.find(c => c.id === destinationContainerId);
-    if (!match) return 'No container';
-    return match.roomName ? `${match.roomName} - ${match.name}` : match.name;
-  }, [containers, destinationContainerId]);
-
   const isSetOrMoc = useMemo(() => isSetOrMocType(part?.type), [part?.type]);
   const isSetOrMocDetails = useMemo(() => {
     const t = (part?.type ?? '').trim().toLowerCase();
@@ -673,9 +716,6 @@ async function loadPartById(id: string): Promise<PartRecord | null> {
       for (const entry of targets) {
         if (cancelled) break;
         try {
-          if (inventoryThumbRequests.current.has(entry.key)) {
-            continue;
-          }
           const cached = await getThumbnail(entry.num, entry.color);
           if (cancelled) break;
           if (cached !== null) {
@@ -687,23 +727,7 @@ async function loadPartById(id: string): Promise<PartRecord | null> {
             });
             continue;
           }
-          inventoryThumbRequests.current.add(entry.key);
-          fetchAndCacheThumbnail(entry.num, entry.color)
-            .then(url => {
-              if (cancelled) return;
-              setInventoryThumbnailCache(prev => {
-                if (Object.prototype.hasOwnProperty.call(prev, entry.key)) {
-                  return prev;
-                }
-                return { ...prev, [entry.key]: url };
-              });
-            })
-            .catch(error => {
-              console.warn('[PartDetail] Failed to fetch inventory thumbnail', entry.num, error);
-            })
-            .finally(() => {
-              inventoryThumbRequests.current.delete(entry.key);
-            });
+          // No background fetch; leave placeholder when not cached.
         } catch (error) {
           console.warn('[PartDetail] Failed to fetch inventory thumbnail', entry.num, error);
         }
@@ -892,11 +916,25 @@ async function loadPartById(id: string): Promise<PartRecord | null> {
   }
   const title =
     part?.name ?? resolvedParams?.partName ?? 'Part Name (placeholder)';
-  const subtitle =
-    (typeof part?.number === 'string' && part.number) ??
-    (part?.id != null ? String(part.id) : null) ??
-    resolvedParams?.partId ??
-    'Set / Part number goes here';
+  const subtitle = (() => {
+    const rawNumber =
+      (typeof part?.number === 'string' && part.number) ??
+      (part?.id != null ? String(part.id) : null) ??
+      resolvedParams?.partId ??
+      null;
+    const typeKey = (part?.type ?? '').toLowerCase();
+    if (typeKey === 'minifig' && rawNumber) {
+      return getMinifigDisplayId(
+        {
+          rebrickable_id: part?.rebrickable_id ?? rawNumber,
+          bricklink_id: part?.bricklink_id ?? null,
+          brickowl_id: part?.brickowl_id ?? null,
+        },
+        marketStandard
+      );
+    }
+    return rawNumber ?? 'Set / Part number goes here';
+  })();
   const resolvedQty = part?.qty ?? part?.quantity ?? resolvedParams?.quantity;
   const quantity =
     resolvedQty != null ? resolvedQty.toString() : '���������?"';
@@ -942,10 +980,7 @@ async function loadPartById(id: string): Promise<PartRecord | null> {
           }
           return;
         }
-        const fetched = await fetchAndCacheThumbnail(designId, colorValue);
-        if (!cancelled && fetched) {
-          setResolvedImageUri(fetched);
-        }
+        // No background fetch; show placeholder until user-provided image exists.
       } catch (error) {
         console.warn('[PartDetail] Failed to resolve thumbnail', designId, error);
       }
@@ -1166,7 +1201,22 @@ async function loadPartById(id: string): Promise<PartRecord | null> {
                     const metaParts: string[] = [];
                     if (row.componentColor) metaParts.push(row.componentColor);
                     if (row.componentSubtype) metaParts.push(row.componentSubtype);
-                    if (row.componentNumber) metaParts.push(`#${row.componentNumber}`);
+                    const isRowMinifig =
+                      (row.componentSubtype ?? '').toLowerCase() === 'minifigure' ||
+                      (row.componentSubtype ?? '').toLowerCase() === 'minifig';
+                    const displayNumber =
+                      isRowMinifig && (row.componentNumber || row.componentRebrickableId)
+                        ? getMinifigDisplayId(
+                            {
+                              rebrickable_id:
+                                row.componentRebrickableId ?? row.componentNumber ?? '',
+                              bricklink_id: row.componentBricklinkId ?? null,
+                              brickowl_id: row.componentBrickowlId ?? null,
+                            },
+                            marketStandard
+                          )
+                        : row.componentNumber;
+                    if (displayNumber) metaParts.push(`#${displayNumber}`);
                     const meta = metaParts.join(' | ');
                     const qtyValue = row.quantity ?? 0;
                     const isSpare = !!row.isSpare;
@@ -1234,53 +1284,12 @@ async function loadPartById(id: string): Promise<PartRecord | null> {
           />
           <View style={styles.modalCard}>
             <Text style={styles.modalTitle}>Move to container</Text>
-            <View style={styles.selector}>
-              <Text style={styles.selectorLabel}>Destination container</Text>
-              <Text style={styles.selectorValue}>{containerLabel}</Text>
-            </View>
-            <ScrollView
-              style={styles.containerList}
-              contentContainerStyle={styles.containerListContent}
-            >
-              <TouchableOpacity
-                style={[
-                  styles.optionRow,
-                  destinationContainerId == null && styles.optionRowActive,
-                ]}
-                onPress={() => setDestinationContainerId(null)}
-              >
-                <Text
-                  style={[
-                    styles.optionText,
-                    destinationContainerId == null && styles.optionTextActive,
-                  ]}
-                >
-                  No container
-                </Text>
-              </TouchableOpacity>
-              {containers.map(option => {
-                const isActive = option.id === destinationContainerId;
-                const label = option.roomName
-                  ? `${option.roomName} - ${option.name}`
-                  : option.name;
-                return (
-                  <TouchableOpacity
-                    key={option.id}
-                    style={[styles.optionRow, isActive && styles.optionRowActive]}
-                    onPress={() => setDestinationContainerId(option.id)}
-                  >
-                    <Text
-                      style={[
-                        styles.optionText,
-                        isActive && styles.optionTextActive,
-                      ]}
-                    >
-                      {label}
-                    </Text>
-                  </TouchableOpacity>
-                );
-              })}
-            </ScrollView>
+            <ContainerPicker
+              label="Destination container"
+              selectedContainerId={destinationContainerId}
+              onChange={setDestinationContainerId}
+              allowCreateNew
+            />
             <Input
               label="How many do you want to move?"
               value={moveQty}

@@ -4,11 +4,13 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 export type ThemePreference = 'light' | 'dark' | 'system';
 export type CategoryStandard = 'bricklink' | 'custom';
 export type ColorStandard = 'rebrickable' | 'bricklink' | 'brickowl';
+export type MarketStandard = 'bricklink' | 'brickowl' | 'rebrickable';
 
 export interface AppSettings {
   themePreference: ThemePreference;
   categoryStandard: CategoryStandard;
   colorStandard: ColorStandard;
+  marketStandard: MarketStandard;
 }
 
 const STORAGE_KEY = 'studarchive.settings';
@@ -17,6 +19,7 @@ export const defaultSettings: AppSettings = {
   themePreference: 'dark',
   categoryStandard: 'bricklink',
   colorStandard: 'rebrickable',
+  marketStandard: 'bricklink',
 };
 
 let currentSettings: AppSettings = defaultSettings;
@@ -27,6 +30,7 @@ function mergeWithDefaults(value: Partial<AppSettings> | null): AppSettings {
     themePreference: value?.themePreference ?? defaultSettings.themePreference,
     categoryStandard: value?.categoryStandard ?? defaultSettings.categoryStandard,
     colorStandard: value?.colorStandard ?? defaultSettings.colorStandard,
+    marketStandard: value?.marketStandard ?? defaultSettings.marketStandard,
   };
 }
 

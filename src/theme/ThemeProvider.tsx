@@ -1,8 +1,8 @@
 import React, { createContext, useContext } from 'react';
-import { useColorScheme } from 'react-native';
+import { Text, useColorScheme } from 'react-native';
 import { useAppSettings } from '../settings/settingsStore';
 import { useAppThemeChoice } from './useAppTheme';
-import { colors as globalColors } from './colors';
+import { colors as baseColors, colors as globalColors } from './colors';
 
 export type ThemeMode = 'light' | 'dark';
 
@@ -13,7 +13,9 @@ export interface Theme {
     surface: string;
     surfaceAlt: string;
     text: string;
+    textMuted: string;
     textSecondary: string;
+    heading: string;
     accent: string;
     border: string;
     danger: string;
@@ -27,7 +29,9 @@ const lightTheme: Theme = {
     surface: '#FFFFFF',
     surfaceAlt: '#F5F5FA',
     text: '#111827',
+    textMuted: '#6B7280',
     textSecondary: '#6B7280',
+    heading: '#111827',
     accent: '#3B82F6',
     border: '#E5E7EB',
     danger: '#EF4444',
@@ -37,16 +41,19 @@ const lightTheme: Theme = {
 const darkTheme: Theme = {
   mode: 'dark',
   colors: {
-    background: '#050816',
-    surface: '#111827',
-    surfaceAlt: '#1F2933',
-    text: '#F9FAFB',
-    textSecondary: '#9CA3AF',
-    accent: '#60A5FA',
-    border: '#1F2937',
-    danger: '#F87171',
+    background: baseColors.background ?? '#050816',
+    surface: baseColors.surface ?? '#111827',
+    surfaceAlt: (baseColors as any).surfaceAlt ?? baseColors.surface ?? '#1F2933',
+    text: baseColors.text ?? '#F9FAFB',
+    textMuted: baseColors.textMuted ?? '#CBD5E1',
+    textSecondary: (baseColors as any).textSecondary ?? baseColors.textMuted ?? '#CBD5E1',
+    heading: (baseColors as any).heading ?? baseColors.text ?? '#F9FAFB',
+    accent: (baseColors as any).primary ?? '#60A5FA',
+    border: baseColors.border ?? '#1F2937',
+    danger: baseColors.danger ?? '#F87171',
   },
 };
+
 
 const ThemeContext = createContext<Theme | null>(null);
 
@@ -56,13 +63,25 @@ export const ThemeProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   const choice = useAppThemeChoice(settings?.themePreference ?? 'dark', systemScheme);
   const theme = choice === 'dark' ? darkTheme : lightTheme;
 
+  // Set a themed default text color so any unstyled <Text> inherits the current theme.
+  const existingTextStyle = Text.defaultProps?.style;
+  const baseTextStyleArray = Array.isArray(existingTextStyle)
+    ? existingTextStyle
+    : existingTextStyle
+    ? [existingTextStyle]
+    : [];
+  Text.defaultProps = Text.defaultProps || {};
+  Text.defaultProps.style = [...baseTextStyleArray, { color: theme.colors.text }];
+  Text.defaultProps.allowFontScaling = Text.defaultProps.allowFontScaling ?? true;
+
   // Keep existing color references in sync for legacy styles synchronously on render.
   globalColors.background = theme.colors.background;
   globalColors.surface = theme.colors.surface;
   (globalColors as any).surfaceAlt = theme.colors.surfaceAlt;
   globalColors.text = theme.colors.text;
-  (globalColors as any).textMuted = theme.colors.textSecondary;
-  (globalColors as any).heading = theme.colors.text;
+  (globalColors as any).textMuted = theme.colors.textMuted;
+  (globalColors as any).textSecondary = theme.colors.textSecondary;
+  (globalColors as any).heading = theme.colors.heading;
   globalColors.border = theme.colors.border;
   (globalColors as any).primary = theme.colors.accent;
   (globalColors as any).primarySoft = theme.colors.surfaceAlt;

@@ -3,11 +3,15 @@
 export interface BuildPart {
   componentName: string;
   componentColorName: string | null;
+  componentColorId?: number | null;
   componentSubtype: 'Part' | 'Minifigure';
   quantity: number;
   designId?: string | null;
   isSpare: boolean;
   imageUrl?: string | null;
+   bricklinkId?: string | null;
+   brickowlId?: string | null;
+   rebrickableId?: string | null;
 }
 
 export interface RebrickableSetMetadata {
@@ -490,7 +494,7 @@ export async function fetchInventoryFromRebrickable(
     quantity: number;
     is_spare: boolean;
     part: { part_num: string; name: string };
-    color: { name: string };
+    color: { id: number; name: string };
     part_img_url?: string | null;
   };
 
@@ -513,6 +517,7 @@ export async function fetchInventoryFromRebrickable(
   const partRows = data.results.map(p => ({
     componentName: p.part?.name ?? 'Unknown part',
     componentColorName: p.color?.name ?? null,
+    componentColorId: p.color?.id ?? null,
     componentSubtype: 'Part', // future: detect minifigs if needed
     quantity: p.quantity ?? 0,
     designId: p.part?.part_num ?? null,
@@ -561,6 +566,9 @@ function dedupeBuildParts(parts: BuildPart[]): BuildPart[] {
       designId?: string | null;
       isSpare: boolean;
       imageUrl?: string | null;
+      bricklinkId?: string | null;
+      brickowlId?: string | null;
+      rebrickableId?: string | null;
     }
   >();
 
@@ -578,6 +586,9 @@ function dedupeBuildParts(parts: BuildPart[]): BuildPart[] {
         ...existing,
         quantity: (existing.quantity ?? 0) + (p.quantity ?? 0),
         imageUrl: existing.imageUrl || p.imageUrl || null,
+        bricklinkId: existing.bricklinkId || p.bricklinkId || null,
+        brickowlId: existing.brickowlId || p.brickowlId || null,
+        rebrickableId: existing.rebrickableId || p.rebrickableId || null,
       });
     } else {
       map.set(key, {
@@ -588,6 +599,9 @@ function dedupeBuildParts(parts: BuildPart[]): BuildPart[] {
         designId: p.designId ?? null,
         isSpare: !!p.isSpare,
         imageUrl: p.imageUrl ?? null,
+        bricklinkId: p.bricklinkId ?? null,
+        brickowlId: p.brickowlId ?? null,
+        rebrickableId: p.rebrickableId ?? null,
       });
     }
   }
@@ -600,6 +614,10 @@ type RebrickableMinifigDetail = {
   name?: string;
   img_url?: string | null;
   set_img_url?: string | null;
+  external_ids?: {
+    BrickLink?: string[];
+    BrickOwl?: string[];
+  };
 };
 
 async function fetchMinifigDetail(figNum: string): Promise<RebrickableMinifigDetail | null> {
@@ -699,6 +717,8 @@ async function fetchSetMinifigs(setNumber: string): Promise<BuildPart[]> {
         let figId = listFigId;
         let figName = m.minifig?.name ?? m.name ?? null;
         let imageUrl: string | null = null;
+        let bricklinkId: string | null = null;
+        let brickowlId: string | null = null;
 
         if (listFigId) {
           if (!detailCache.has(listFigId)) {
@@ -712,6 +732,8 @@ async function fetchSetMinifigs(setNumber: string): Promise<BuildPart[]> {
             figName = detail.name;
           }
           imageUrl = detail?.img_url ?? detail?.set_img_url ?? null;
+          bricklinkId = detail?.external_ids?.BrickLink?.[0] ?? null;
+          brickowlId = detail?.external_ids?.BrickOwl?.[0] ?? null;
         }
 
         const keySource = (figId ?? figName ?? '').trim().toLowerCase();
@@ -730,6 +752,9 @@ async function fetchSetMinifigs(setNumber: string): Promise<BuildPart[]> {
             designId: figId ?? null,
             quantity: qty,
             imageUrl: imageUrl ?? null,
+            bricklinkId,
+            brickowlId,
+            rebrickableId: figId ?? listFigId ?? null,
           });
         }
       }

@@ -5,7 +5,6 @@ import {
   Platform,
   ScrollView,
   StyleSheet,
-  Text,
   TouchableOpacity,
   View,
 } from 'react-native';
@@ -15,6 +14,14 @@ import { getDb } from '../db/database';
 import { layout } from '../theme/layout';
 import { typography } from '../theme/typography';
 import { useTheme, type Theme } from '../theme/ThemeProvider';
+import { ThemedText as Text } from '../components/ThemedText';
+import { ContainerPicker } from '../components/ContainerPicker';
+import {
+  fetchPartColorsFromRebrickable,
+  type RebrickablePartColor,
+} from '../services/inventoryImport/rebrickable';
+import { resolveCatalogColorById } from '../db/catalogColors';
+import { upsertCatalogColorFromRebrickable } from '../db/catalogUpsert';
 
 export type EditPartParams = {
   partId: string;
@@ -36,7 +43,9 @@ type EditableItem = {
   description: string | null;
   qty: number | null;
   container_id: number | null;
+  number?: string | null;
   image_uri?: string | null;
+  catalog_color_id?: number | null;
 };
 
 export default function EditPartScreen({
@@ -61,16 +70,19 @@ export default function EditPartScreen({
   const [categoryName, setCategoryName] = useState('');
   const [description, setDescription] = useState('');
   const [quantity, setQuantity] = useState('');
+  const [partNumber, setPartNumber] = useState('');
+  const [partColors, setPartColors] = useState<RebrickablePartColor[]>([]);
+  const [selectedColorId, setSelectedColorId] = useState<number | null>(null);
+  const [catalogColorId, setCatalogColorId] = useState<number | null>(null);
+  const [colorLoading, setColorLoading] = useState(false);
+  const [colorModalVisible, setColorModalVisible] = useState(false);
+  const [lastColorLookupPart, setLastColorLookupPart] = useState<string | null>(null);
   const [imageUri, setImageUri] = useState('');
   const theme = useTheme();
   const styles = useMemo(() => createStyles(theme), [theme]);
   const [selectedContainerId, setSelectedContainerId] = useState<number | null>(
     null
   );
-  const [containers, setContainers] = useState<
-    { id: number; name: string; roomName?: string | null }[]
-  >([]);
-  const [containerPickerVisible, setContainerPickerVisible] = useState(false);
 
   async function loadItem(id: string): Promise<EditableItem | null> {
     const db = await getDb();
@@ -85,7 +97,9 @@ export default function EditPartScreen({
           description,
           qty,
           container_id,
-          image_uri
+          number,
+          image_uri,
+          catalog_color_id
         FROM items
         WHERE id = ?
         LIMIT 1;
@@ -113,7 +127,18 @@ export default function EditPartScreen({
         }
         setName(record.name ?? '');
         setItemType(record.type ?? '');
-        setColorName(record.color ?? '');
+        if (record.catalog_color_id) {
+          try {
+            const resolved = await resolveCatalogColorById(record.catalog_color_id);
+            if (!isMounted) return;
+            setColorName(resolved?.name ?? record.color ?? '');
+          } catch (err) {
+            console.warn('[EditPart] Failed to resolve catalog color', err);
+            setColorName(record.color ?? '');
+          }
+        } else {
+          setColorName(record.color ?? '');
+        }
         setCategoryName(record.category ?? '');
         setDescription(record.description ?? '');
         setQuantity(
@@ -121,10 +146,12 @@ export default function EditPartScreen({
             ? String(record.qty)
             : ''
         );
+        setPartNumber(record.number ?? '');
         setImageUri(record.image_uri ?? '');
         setSelectedContainerId(
           record.container_id != null ? Number(record.container_id) : null
         );
+        setCatalogColorId(record.catalog_color_id ?? null);
         setError(null);
       } catch (e: any) {
         console.error(e);
@@ -143,44 +170,39 @@ export default function EditPartScreen({
     };
   }, [partId]);
 
-  useEffect(() => {
-    let isMounted = true;
-    (async () => {
-      try {
-        const db = await getDb();
-        const rows = await db.getAllAsync<{
-          id: number;
-          name: string;
-          roomName: string | null;
-        }>(
-          `
-            SELECT
-              c.id,
-              c.name,
-              r.name AS roomName
-            FROM containers c
-            LEFT JOIN rooms r ON r.id = c.room_id
-            ORDER BY c.name ASC;
-          `
-        );
-        if (isMounted) {
-          setContainers(rows);
-        }
-      } catch (e: any) {
-        console.error('Failed to load containers', e);
+  async function loadPartColors(partNum: string) {
+    const trimmed = partNum.trim();
+    if (!trimmed) {
+      setPartColors([]);
+      setSelectedColorId(null);
+      setLastColorLookupPart(null);
+      return;
+    }
+    if (trimmed === lastColorLookupPart && partColors.length > 0) {
+      return;
+    }
+    setColorLoading(true);
+    setPartColors([]);
+    setSelectedColorId(null);
+    try {
+      const colors = await fetchPartColorsFromRebrickable(trimmed);
+      setPartColors(colors);
+      setLastColorLookupPart(trimmed);
+      if (colors.length === 1) {
+        const only = colors[0];
+        setSelectedColorId(only.colorId);
+        setColorName(only.name);
+        setColorModalVisible(false);
       }
-    })();
-    return () => {
-      isMounted = false;
-    };
-  }, []);
+    } catch (err) {
+      console.warn('[EditPart] Failed to load colors', { partNum: trimmed }, err);
+      setPartColors([]);
+      setSelectedColorId(null);
+    } finally {
+      setColorLoading(false);
+    }
+  }
 
-  const containerLabel = useMemo(() => {
-    if (selectedContainerId == null) return 'No container';
-    const match = containers.find(c => c.id === selectedContainerId);
-    if (!match) return 'No container';
-    return match.roomName ? `${match.roomName} - ${match.name}` : match.name;
-  }, [containers, selectedContainerId]);
 
   async function handleSave() {
     if (!partId) return;
@@ -196,6 +218,21 @@ export default function EditPartScreen({
       }
       const parsedQty = parseInt(quantity, 10);
       const resolvedQty = Number.isNaN(parsedQty) ? 0 : parsedQty;
+      let catalogColorIdToSave = catalogColorId;
+      if (selectedColorId) {
+        const matchedColor = partColors.find(c => c.colorId === selectedColorId);
+        if (matchedColor) {
+          try {
+            catalogColorIdToSave = await upsertCatalogColorFromRebrickable({
+              id: matchedColor.colorId,
+              name: matchedColor.name,
+            });
+          } catch (error) {
+            console.warn('[EditPart] catalog color upsert failed', matchedColor.colorId, error);
+          }
+        }
+      }
+      const colorValue = colorName.trim() || null;
 
       await db.runAsync(
         `
@@ -207,17 +244,19 @@ export default function EditPartScreen({
             description = ?,
             qty = ?,
             container_id = ?,
-            image_uri = ?
+            image_uri = ?,
+            catalog_color_id = ?
           WHERE id = ?;
         `,
         [
           trimmedName,
-          colorName.trim() || null,
+          colorValue,
           categoryName.trim() || null,
           description.trim() || null,
           resolvedQty,
           selectedContainerId,
           imageUri.trim() || null,
+          catalogColorIdToSave,
           partId,
         ]
       );
@@ -299,7 +338,26 @@ export default function EditPartScreen({
               value={colorName}
               editable={!loading}
               onChangeText={setColorName}
+              onFocus={async () => {
+                if (partNumber.trim()) {
+                  await loadPartColors(partNumber);
+                }
+                setColorModalVisible(true);
+              }}
               placeholder="Enter color"
+            />
+          ) : null}
+          {!isSetType ? (
+            <Button
+              label={colorLoading ? 'Loading colors...' : 'Choose color'}
+              variant="outline"
+              disabled={colorLoading || !partNumber.trim()}
+              onPress={async () => {
+                if (partNumber.trim()) {
+                  await loadPartColors(partNumber);
+                }
+                setColorModalVisible(true);
+              }}
             />
           ) : null}
           <Input
@@ -327,14 +385,12 @@ export default function EditPartScreen({
             inputMode="numeric"
             placeholder="0"
           />
-          <TouchableOpacity
-            style={styles.selector}
-            disabled={loading}
-            onPress={() => setContainerPickerVisible(true)}
-          >
-            <Text style={styles.selectorLabel}>Container</Text>
-            <Text style={styles.selectorValue}>{containerLabel}</Text>
-          </TouchableOpacity>
+          <ContainerPicker
+            label="Container"
+            selectedContainerId={selectedContainerId}
+            onChange={setSelectedContainerId}
+            allowCreateNew
+          />
 
           <Button
             label={saving ? 'Saving...' : 'Save'}
@@ -355,65 +411,45 @@ export default function EditPartScreen({
           />
         </View>
       </ScrollView>
+
       <Modal
-        visible={containerPickerVisible}
+        visible={colorModalVisible}
         transparent
         animationType="fade"
-        onRequestClose={() => setContainerPickerVisible(false)}
+        onRequestClose={() => setColorModalVisible(false)}
       >
-        <View style={styles.modalOverlay}>
-          <TouchableOpacity
-            style={styles.modalBackdrop}
-            activeOpacity={1}
-            onPress={() => setContainerPickerVisible(false)}
-          />
+        <TouchableOpacity
+          style={styles.modalOverlay}
+          activeOpacity={1}
+          onPress={() => setColorModalVisible(false)}
+        >
           <View style={styles.modalCard}>
-            <TouchableOpacity
-              style={[
-                styles.optionRow,
-                selectedContainerId == null && styles.optionRowActive,
-              ]}
-              onPress={() => {
-                setSelectedContainerId(null);
-                setContainerPickerVisible(false);
-              }}
-            >
-              <Text
-                style={[
-                  styles.optionText,
-                  selectedContainerId == null && styles.optionTextActive,
-                ]}
-              >
-                No container
-              </Text>
-            </TouchableOpacity>
-            {containers.map(option => {
-              const isActive = option.id === selectedContainerId;
-              const label = option.roomName
-                ? `${option.roomName} - ${option.name}`
-                : option.name;
+            <Text style={styles.modalTitle}>Select Color</Text>
+            {colorLoading ? <Text style={styles.modalBody}>Loading colors...</Text> : null}
+            {partColors.length === 0 && !colorLoading ? (
+              <Text style={styles.modalBody}>No colors yet. Enter a color manually.</Text>
+            ) : null}
+            {partColors.map(option => {
+              const isActive = option.colorId === selectedColorId;
               return (
                 <TouchableOpacity
-                  key={option.id}
+                  key={option.colorId}
                   style={[styles.optionRow, isActive && styles.optionRowActive]}
                   onPress={() => {
-                    setSelectedContainerId(option.id);
-                    setContainerPickerVisible(false);
+                    setSelectedColorId(option.colorId);
+                    setColorName(option.name);
+                    setColorModalVisible(false);
                   }}
                 >
-                  <Text
-                    style={[
-                      styles.optionText,
-                      isActive && styles.optionTextActive,
-                    ]}
-                  >
-                    {label}
+                  <Text style={[styles.optionText, isActive && styles.optionTextActive]}>
+                    {option.name}
                   </Text>
                 </TouchableOpacity>
               );
             })}
+            <Button label="Close" variant="outline" onPress={() => setColorModalVisible(false)} />
           </View>
-        </View>
+        </TouchableOpacity>
       </Modal>
     </KeyboardAvoidingView>
   );
@@ -433,6 +469,29 @@ function createStyles(theme: Theme) {
       padding: layout.spacingLg,
       paddingBottom: layout.spacingXl * 2,
       flexGrow: 1,
+    },
+    modalOverlay: {
+      flex: 1,
+      backgroundColor: '#00000066',
+      justifyContent: 'center',
+      padding: layout.spacingLg,
+    },
+    modalCard: {
+      backgroundColor: colors.surface,
+      borderRadius: layout.radiusLg,
+      padding: layout.spacingLg,
+      borderWidth: 1,
+      borderColor: colors.border,
+      gap: layout.spacingSm,
+    },
+    modalTitle: {
+      fontSize: typography.sectionTitle,
+      fontWeight: '700',
+      color: colors.text,
+    },
+    modalBody: {
+      fontSize: typography.body,
+      color: colors.textSecondary,
     },
     card: {
       backgroundColor: colors.surface,
@@ -466,62 +525,29 @@ function createStyles(theme: Theme) {
     minHeight: 90,
     textAlignVertical: 'top',
   },
-  saveButton: {
-    marginTop: layout.spacingSm,
-  },
-  selector: {
-    borderWidth: 1,
-    borderColor: colors.border,
-    borderRadius: layout.radiusMd,
-    paddingHorizontal: layout.spacingMd,
-    paddingVertical: layout.spacingSm,
-    backgroundColor: colors.surface,
-  },
-  selectorLabel: {
-    fontSize: typography.caption,
-    color: colors.textMuted,
-    marginBottom: layout.spacingXs / 2,
-  },
-  selectorValue: {
-    fontSize: typography.body,
-    color: colors.text,
-    fontWeight: '600',
-  },
-  modalOverlay: {
-    flex: 1,
-    backgroundColor: colors.modalBackdrop,
-    justifyContent: 'center',
-    alignItems: 'center',
-    padding: layout.spacingMd,
-  },
-  modalBackdrop: {
-    ...StyleSheet.absoluteFillObject,
-  },
-  modalCard: {
-    width: '100%',
-    maxWidth: 420,
-    backgroundColor: colors.surface,
-    borderRadius: layout.radiusMd,
-    borderWidth: 1,
-    borderColor: colors.border,
-    paddingVertical: layout.spacingSm,
-  },
-  optionRow: {
-    paddingVertical: layout.spacingSm,
-    paddingHorizontal: layout.spacingMd,
-  },
-  optionRowActive: {
-    backgroundColor: colors.primarySoft,
-  },
-  optionText: {
-    fontSize: typography.body,
-    color: colors.text,
-  },
-  optionTextActive: {
-    color: colors.heading,
-    fontWeight: '700',
-  },
-});
+    saveButton: {
+      marginTop: layout.spacingSm,
+    },
+    optionRow: {
+      paddingVertical: layout.spacingSm,
+      paddingHorizontal: layout.spacingSm,
+      borderRadius: layout.radiusSm,
+      borderWidth: 1,
+      borderColor: colors.border,
+      marginTop: layout.spacingXs,
+    },
+    optionRowActive: {
+      backgroundColor: colors.surfaceAlt ?? colors.surface,
+    },
+    optionText: {
+      fontSize: typography.body,
+      color: colors.text,
+    },
+    optionTextActive: {
+      color: colors.text,
+      fontWeight: '700',
+    },
+  });
 }
 
 

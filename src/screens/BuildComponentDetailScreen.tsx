@@ -1,11 +1,14 @@
 ﻿import React, { useEffect, useMemo, useState } from 'react';
-import { ScrollView, View, Text, StyleSheet, Image } from 'react-native';
+import { ScrollView, View, StyleSheet, Image } from 'react-native';
 import { Button } from '../components/Button';
 import { getDb } from '../db/database';
 import { layout } from '../theme/layout';
 import { typography } from '../theme/typography';
 import { useTheme, type Theme } from '../theme/ThemeProvider';
-import { fetchAndCacheThumbnail, getThumbnail } from '../services/thumbnailStore';
+import { getThumbnail } from '../services/thumbnailStore';
+import { ThemedText as Text } from '../components/ThemedText';
+import { useAppSettings } from '../settings/settingsStore';
+import { getMinifigDisplayId } from '../utils/marketDisplay';
 
 type BuildComponentDetailParams = {
   buildPartId: number;
@@ -18,6 +21,9 @@ type BuildPartRecord = {
   component_subtype: string | null;
   component_name: string | null;
   component_number: string | null;
+  component_bricklink_id?: string | null;
+  component_brickowl_id?: string | null;
+  component_rebrickable_id?: string | null;
   component_color: string | null;
   quantity: number | null;
   component_description?: string | null;
@@ -53,6 +59,8 @@ export default function BuildComponentDetailScreen({
   const [imageUri, setImageUri] = useState<string | null>(null);
   const theme = useTheme();
   const styles = useMemo(() => createStyles(theme), [theme]);
+  const { settings } = useAppSettings();
+  const marketStandard = settings?.marketStandard ?? 'bricklink';
 
   useEffect(() => {
     let isMounted = true;
@@ -68,6 +76,9 @@ export default function BuildComponentDetailScreen({
               component_subtype,
               component_name,
               component_number,
+              component_bricklink_id,
+              component_brickowl_id,
+              component_rebrickable_id,
               component_color,
               component_description,
               image_uri,
@@ -125,10 +136,7 @@ export default function BuildComponentDetailScreen({
           setImageUri(cached || null);
           return;
         }
-        const fetched = await fetchAndCacheThumbnail(designId, colorValue);
-        if (!cancelled) {
-          setImageUri(fetched || null);
-        }
+        // No auto-fetch; show placeholder until user fetches explicitly elsewhere.
       } catch (error) {
         console.warn('[BuildComponentDetail] Failed to resolve thumbnail', designId, error);
       }
@@ -139,6 +147,20 @@ export default function BuildComponentDetailScreen({
   }, [component, isMinifig]);
 
   const designIdLabel = isMinifig ? 'Fig ID' : 'Part ID';
+  const displayComponentNumber =
+    isMinifig && (component?.component_rebrickable_id || component?.component_number)
+      ? getMinifigDisplayId(
+          {
+            rebrickable_id:
+              component?.component_rebrickable_id ??
+              component?.component_number ??
+              '',
+            bricklink_id: component?.component_bricklink_id ?? null,
+            brickowl_id: component?.component_brickowl_id ?? null,
+          },
+          marketStandard
+        )
+      : component?.component_number ?? 'N/A';
 
   return (
     <ScrollView style={styles.container} contentContainerStyle={styles.content}>
@@ -171,9 +193,7 @@ export default function BuildComponentDetailScreen({
 
         <View style={styles.metaRow}>
           <Text style={styles.metaLabel}>{designIdLabel}</Text>
-          <Text style={styles.metaValue}>
-            {component?.component_number ?? 'N/A'}
-          </Text>
+          <Text style={styles.metaValue}>{displayComponentNumber}</Text>
         </View>
         {!isMinifig ? (
           <View style={styles.metaRow}>
